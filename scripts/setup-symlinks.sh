@@ -1,0 +1,1 @@
+../.sdl-dos-ports/shared/scripts/setup-symlinks.sh

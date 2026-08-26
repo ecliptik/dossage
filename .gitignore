@@ -1,0 +1,70 @@
+# Build artifacts
+/build/
+/dist/
+*.o
+*.obj
+*.exe
+*.EXE
+
+# Vendored upstreams -- cloned by scripts/fetch-sources.sh, gitignored
+# entirely. Only vendor/sources.manifest is tracked.
+/vendor/SDL/
+/vendor/SDL_mixer/
+/vendor/passage/
+/vendor/minorgems/
+
+# CWSDPMI (and any other redistributable-binary vendor deps) -- fetched by
+# a future scripts/fetch-vendor-binaries.sh + vendor/binaries.manifest,
+# same pattern as doskutsu. Add specific negations for the .doc/license
+# files that must stay tracked once that script exists.
+/vendor/cwsdpmi/*.exe
+
+# Symlink to the ~/emulators/ hub (recreated by scripts/setup-symlinks.sh)
+/tools/djgpp
+
+# DOSBox-X runtime artifacts
+dosbox-x.log
+mapper-*.map
+capture/
+*.ips
+.DBLOCALFILE_ATR_*
+
+# CMake generated files that might end up at the root
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Claude Code local session state (agents, skills, settings) -- same
+# convention as doskutsu: nothing under .claude/ is tracked.
+.claude/
+
+# Scratch / draft area
+/.tmp/
+
+# Internal-only planning docs -- same convention as doskutsu: kept on disk
+# for ongoing agent/session continuity, not part of the public face of the
+# repo. README.md, STATUS.md, LICENSE-REVIEW.md remain tracked as the
+# public-facing summary.
+/CLAUDE.md
+/PLAN.md
+/TODO.md
+
+# Runtime test artifacts
+*.SWP
+DEBUG.LOG
+SETTINGS.DAT

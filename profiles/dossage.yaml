@@ -1,0 +1,66 @@
+# dossage -- the target-software profile for the vcctrl harness.
+#
+# Modeled on vcctrl's profiles/doskutsu.yaml. Everything in this file is a
+# fact about the DOS program and the machine it runs on -- nothing here is
+# a fact about vcctrl itself, and nothing here belongs in the rig's
+# vcctrl.yaml (that file stays machine-local and is not tracked in any
+# repo).
+#
+# See sdl-dos-ports' docs/hardware-testing.md before using this: the
+# harness/vcctrl-sweep|-cell|-collect orchestration scripts are currently
+# doskutsu-coupled and may not yet run a second project's profile
+# unattended. Filled in only as far as BOOTSTRAP status actually knows --
+# the env/profile_witness/sweeps sections below are placeholders until
+# this port has a boot-menu and a scripted/TAS-driven run to describe.
+
+version: 1
+name: dossage
+
+# ------------------------------------------------------------------ target
+target:
+  dir: "C:\\DOSSAGE"
+  configs: "CFGS"
+  ftp_put: "C:\\MTCP\\PUT.BAT"
+
+  # TBD -- dossage has no boot-menu / multi-profile CONFIG.SYS yet (no
+  # sound-vs-network profile split exists to prove). Fill in once this
+  # port's DOS boot environment is designed, following the one-directional
+  # discipline in doskutsu's own profile (docs/HARNESS-STANDARD.md sec. 12,
+  # docs/OPEN-FAULTS.md sec. 15) -- do not invent a variable nothing reads.
+  profile_witness:
+    variable: TBD
+    proves: TBD
+    direction: one-way
+
+  # TBD -- Passage has no TAS-replay/deterministic-seed/log-tag env vars
+  # (yet). Fill in only once this port actually implements the equivalent
+  # of doskutsu's DOSKUTSU_TAS_* family -- inventing names here that
+  # nothing on the target consults would silently no-op.
+  env:
+    replay: DOSSAGE_TAS_REPLAY
+    seed: DOSSAGE_TAS_PRNG_SEED
+    auto_exit_tick: DOSSAGE_TAS_AUTO_EXIT_TICK
+    log_tag: DOSSAGE_LOG_TAG
+    pin_native_mode: DOSSAGE_PIN_NATIVE_MODE
+    shot_ticks: DOSSAGE_SHOT_TICKS
+
+timing:
+  # TBD -- no boot menu exists yet to measure a timeout window against.
+  menu_window_s: 14
+
+# ----------------------------------------------------------------- machines
+# Matches sdl-dos-ports' HARDWARE.md matrix (same physical rig doskutsu
+# uses, hand-swapped CPUs) so results stay comparable across ports.
+# Per operator direction 2026-08-26: once dossage is PLAYABLE and
+# optimized, test across the full CPU / video-card / sound-card matrix
+# doskutsu uses, not just the 486DX2-50 minimum target -- this table is
+# ready for that; the rig just needs the CPU swapped in per cell.
+machines:
+  "1": {tag: "P", name: "Pentium OverDrive 83"}
+  "2": {tag: "A", name: "Am5x86-133"}
+  "3": {tag: "6", name: "486DX2-66"}
+  "4": {tag: "5", name: "486DX2-50"}
+
+# ------------------------------------------------------------------- sweeps
+# Not yet meaningful -- no scripted/TAS-driven unattended run exists. Add
+# once one does, with measured (not guessed) per-sweep timeouts.

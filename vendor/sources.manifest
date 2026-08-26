@@ -1,0 +1,50 @@
+# vendor/sources.manifest -- pinned upstream sources for dossage.
+#
+# Format (whitespace-separated, one entry per line, '#' for comments):
+#
+#     <name>  <url>  <ref>  <sha>
+#
+# <name>  directory name under vendor/ that fetch-sources.sh clones into
+# <url>   git clone URL
+# <ref>   branch or tag to track (used when sha == PIN_ME to resolve, and
+#         for documentation purposes once a concrete SHA is pinned)
+# <sha>   40-char commit SHA to check out, or PIN_ME to fetch the tip of <ref>
+#
+# Run `./scripts/fetch-sources.sh --resolve` to resolve any PIN_ME entries;
+# copy the printed SHAs back into this file to pin.
+
+# SDL3, same pin as the shared sdl3-dos patch series in
+# .sdl-dos-ports/shared/patches/sdl3-dos/ was built against (verified
+# against doskutsu's own vendor/sources.manifest, which the shared patch
+# series was extracted from). Must be a post-PR-#15377 commit -- that PR
+# added the DOS backend.
+SDL            https://github.com/libsdl-org/SDL.git             main             74a746281f2208e07a7680560fcb7ec57565228e
+
+# SDL3_mixer release-3.2.x, same pin as doskutsu's own manifest. Passage's
+# own audio is a from-scratch software synth over a raw sample callback --
+# no file-decode codecs are needed -- but SDL3_mixer's audio-device/stream
+# plumbing is still the DOS-proven path for opening the audio device.
+SDL_mixer      https://github.com/libsdl-org/SDL_mixer.git       release-3.2.x    e69654e9eac6d07ec5dfb9d9db022e836d3d1e11
+
+# NOTE: SDL_image is deliberately NOT vendored. Passage's .tga graphics are
+# decoded by minorGems' own TGAImageConverter (a small, self-contained
+# uncompressed-TGA reader) -- no PNG/libpng dependency exists in the
+# original engine, so there is nothing for SDL_image to do here. Do not
+# add it back without a concrete reason found during porting.
+
+# Passage (Jason Rohrer, 2007). Author's own GitHub account -- verified by
+# direct clone: 2-commit tree, "Exported latest revision from sourceforge
+# cvs, discarding history." This is the canonical upstream, not a fork or
+# mirror. Public domain (see LICENSE-REVIEW.md).
+passage        https://github.com/jasonrohrer/Passage.git        master           2f713f261dc907f6feda106ebbee0464eeab791d
+
+# minorGems -- Jason Rohrer's own utility library; Passage's build depends
+# on a small subset of it (see PLAN.md's research notes). Public domain,
+# verified via its own in-repo no_copyright.txt (see LICENSE-REVIEW.md).
+# Pin is current HEAD as of this research pass (2026-08-26) -- a starting
+# point, not a confirmed-compatible revision. minorGems is a large,
+# actively-developed library used by much newer projects (OneLife, etc.);
+# if the compile phase hits API drift in the small subset Passage uses,
+# walk this pin backward toward Passage's own era (2010-2017) before
+# patching around a moving target -- see PLAN.md's "Open pin risk" note.
+minorgems      https://github.com/jasonrohrer/minorGems.git      master           ef42b1ce511f2d355d5fc898fcce0b0af3a76d62
