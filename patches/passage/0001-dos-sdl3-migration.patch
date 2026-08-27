@@ -1,0 +1,722 @@
+From b940ab1f46f478395cdacb949b55f220f737a005 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Wed, 26 Aug 2026 16:48:05 -0700
+Subject: [PATCH] dos: migrate SDL 1.2 -> SDL3 API surface
+
+Passage's entire SDL surface is small (raw video/input/audio, no
+mixer/image/font libs), so this is one patch covering the full
+migration rather than the multi-patch mechanical-rename series
+doskutsu's much larger NXEngine-evo migration needed:
+
+- Video: SDL_SetVideoMode -> SDL_CreateWindow + SDL_GetWindowSurface.
+  SDL_Flip/SDL_UpdateRect -> SDL_UpdateWindowSurface (SDL3 dropped the
+  hardware-double-buffer flag; SDL_DOUBLEBUF was requested
+  unconditionally in the original, so the partial/full SDL_UpdateRect
+  branches it gated were already dead code -- collapsed to one present
+  call). SDL_FillRect -> SDL_FillSurfaceRect. Force fullscreen-only on
+  DOS (__DJGPP__) -- no windowed VGA/VESA concept exists.
+- Input: SDL_GetKeyState (indexed by keycode in SDL1.2) ->
+  SDL_GetKeyboardState (indexed by SDL_Scancode in SDL3) -- all
+  getKeyDown() call sites converted from SDLK_* to SDL_SCANCODE_*.
+  event.key.keysym.sym -> event.key.key; SDL_KEYDOWN/SDL_QUIT ->
+  SDL_EVENT_KEY_DOWN/SDL_EVENT_QUIT; lowercase single-letter keycodes
+  (SDLK_q etc.) -> uppercase (SDLK_Q) per SDL3's renamed constants.
+- Joystick: sequential-index SDL_JoystickOpen(0)/SDL_NumJoysticks ->
+  instance-ID SDL_GetJoysticks()/SDL_OpenJoystick(id). Added a NULL
+  guard around SDL_GetNumJoystickHats that the original called
+  unconditionally even after a failed open -- a latent bug harmless
+  under SDL1.2 but not worth carrying forward.
+- Audio: SDL_OpenAudio(spec+callback)/SDL_CloseAudio ->
+  SDL_OpenAudioDeviceStream(devid, spec, callback,
+  userdata)/SDL_DestroyAudioStream. The callback changed from a "push"
+  model (write into a buffer SDL owns) to a "pull" model (SDL asks for
+  N more bytes; supply them via SDL_PutAudioStreamData) -- musicPlayer's
+  synth logic itself (Timbre/Envelope/note-grid stepping) is unchanged,
+  only the buffer handoff at the end of audioCallback. SDL_LockAudio/
+  SDL_UnlockAudio -> SDL_LockAudioStream/SDL_UnlockAudioStream against
+  the new module-level audioStream handle.
+- SDL_HINT_DOS_ALLOW_DIRECT_FRAMEBUFFER=1 set before SDL_Init on DOS --
+  without it SDL3-DOS's window-surface flush silently writes nowhere
+  visible (see <SDL3/SDL_dosvesa_directaccess.h>).
+- g_pixtone_active_count: the shared SDL3-DOS Sound Blaster backend
+  declares this as an "engine -> SDL extern" for a doskutsu/Cave-Story-
+  specific Pixtone diagnostic (see sdl-dos-ports' shared/patches/
+  sdl3-dos/README.md's "Known naming debt"). Passage has no Pixtone
+  equivalent; defined here permanently at 0.
+
+blowUp.cpp needed no changes: SDL_Surface's pixels/pitch/w/h fields are
+unchanged between SDL1.2 and SDL3, and blowupOntoScreen() only touches
+those.
+
+Real-hardware-equivalent validation (2026-08-26): builds clean under
+DJGPP, boots to title screen and into gameplay under DOSBox-X
+(build/stage, dosbox-x-fast.conf, lfn=true pending the 8.3-rename
+follow-up noted in PLAN.md) -- title screen and gameplay both render
+and respond to keyboard input correctly. TITLE_SCREEN and PLAYABLE
+milestones reached on the first successful compile.
+---
+ .gitignore                 |   1 +
+ gameSource/blowUp.h        |   3 +-
+ gameSource/game.cpp        | 252 +++++++++++++++++++------------------
+ gameSource/musicPlayer.cpp |  90 +++++++------
+ 4 files changed, 189 insertions(+), 157 deletions(-)
+ create mode 100644 .gitignore
+
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..5761abc
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1 @@
++*.o
+diff --git a/gameSource/blowUp.h b/gameSource/blowUp.h
+index ff52bd4..530a6e4 100644
+--- a/gameSource/blowUp.h
++++ b/gameSource/blowUp.h
+@@ -1,6 +1,5 @@
+ 
+-#include <SDL/SDL_video.h>
+-#include <SDL/SDL.h>
++#include <SDL3/SDL.h>
+ 
+ 
+ /**
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index b361feb..d1d4082 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -18,10 +18,8 @@
+ #include <string.h>
+ 
+ 
+-// let SDL override our main function with SDLMain
+-#include <SDL/SDL_main.h>
+-
+-// must do this before SDL include to prevent WinMain linker errors on win32
++// DOS-PORT: SDL3 has no WinMain-shim requirement (that was an SDL1.2/2
++// win32-only concern); SDL_main.h is not needed on DOS.
+ int mainFunction( int inArgCount, char **inArgs );
+ 
+ int main( int inArgCount, char **inArgs ) {
+@@ -29,7 +27,7 @@ int main( int inArgCount, char **inArgs ) {
+     }
+ 
+ 
+-#include <SDL/SDL.h>
++#include <SDL3/SDL.h>
+ 
+ #include "blowUp.h"
+ #include "World.h"
+@@ -101,6 +99,21 @@ double timeDelta = - ( (double)width / ( gameTime * lockedFrameRate ) );
+ 
+ 
+ 
++// DOS-PORT: the shared SDL3-DOS Sound Blaster backend
++// (SDL_dosaudio_sb.c) declares this as an "engine -> SDL extern" for its
++// Pixtone-active-channel diagnostic histogram -- a doskutsu/Cave-Story-
++// specific instrumentation feature baked into the shared patch series
++// (see sdl-dos-ports' shared/patches/sdl3-dos/README.md's "Known naming
++// debt" section) that every consumer must define at link time regardless
++// of whether it uses Pixtone. Passage has no Pixtone-equivalent SFX
++// system, so this stays permanently at 0 -- accurately reporting zero
++// active Pixtone channels, not a stub pretending to implement the
++// feature.
++extern "C" {
++volatile uint32_t g_pixtone_active_count = 0;
++}
++
++
+ // the joystick to read from, or NULL if there's no available joystick
+ SDL_Joystick *joystick;
+ 
+@@ -116,10 +129,13 @@ void catch_int(int sig_num) {
+ 
+ 
+ 
+-char getKeyDown( int inKeyCode ) {
++// DOS-PORT: SDL3's SDL_GetKeyboardState() is indexed by SDL_Scancode, not
++// SDL_Keycode -- SDL1.2's keystate array happened to be indexable directly
++// by SDLK_* values, which is no longer true. Callers now pass a scancode.
++char getKeyDown( SDL_Scancode inScancode ) {
+     SDL_PumpEvents();
+-	Uint8 *keys = SDL_GetKeyState( NULL );
+-	return keys[ inKeyCode ] == SDL_PRESSED;
++    const bool *keys = SDL_GetKeyboardState( NULL );
++    return keys[ inScancode ];
+     }
+ 
+ 
+@@ -128,11 +144,11 @@ char getHatDown( Uint8 inHatPosition ) {
+     if( joystick == NULL ) {
+         return false;
+         }
+-    
+-    SDL_JoystickUpdate();
+ 
+-    Uint8 hatPosition = SDL_JoystickGetHat( joystick, 0 );
+-    
++    SDL_UpdateJoysticks();
++
++    Uint8 hatPosition = SDL_GetJoystickHat( joystick, 0 );
++
+     if( hatPosition & inHatPosition ) {
+         return true;
+         }
+@@ -145,9 +161,9 @@ char getHatDown( Uint8 inHatPosition ) {
+ int joyThreshold = 25000;
+ 
+ char getJoyPushed( Uint8 inHatPosition ) {
+-        
+-    Sint16 x = SDL_JoystickGetAxis(joystick, 0);
+-    Sint16 y = SDL_JoystickGetAxis(joystick, 1);
++
++    Sint16 x = SDL_GetJoystickAxis(joystick, 0);
++    Sint16 y = SDL_GetJoystickAxis(joystick, 1);
+     
+     switch( inHatPosition ) {
+         case SDL_HAT_DOWN:
+@@ -178,15 +194,15 @@ char waitForKeyOrButton() {
+     while( true ) {
+         while( SDL_WaitEvent( &event ) ) {
+             switch( event.type ) {
+-                case SDL_JOYHATMOTION:
+-                case SDL_JOYBUTTONDOWN:
+-                case SDL_JOYBUTTONUP:
+-                case SDL_KEYDOWN:
+-                case SDL_KEYUP:
++                case SDL_EVENT_JOYSTICK_HAT_MOTION:
++                case SDL_EVENT_JOYSTICK_BUTTON_DOWN:
++                case SDL_EVENT_JOYSTICK_BUTTON_UP:
++                case SDL_EVENT_KEY_DOWN:
++                case SDL_EVENT_KEY_UP:
+                     return true;
+                     break;
+                 // watch for quit event
+-                case SDL_QUIT:
++                case SDL_EVENT_QUIT:
+                     return false;
+                     break;
+                 default:
+@@ -203,6 +219,14 @@ char waitForKeyOrButton() {
+ 
+ Uint32 *gameImage;
+ 
++// DOS-PORT: SDL3 removed SDL_SetVideoMode's hardware-double-buffer flag.
++// SDL_DOUBLEBUF was requested unconditionally in the original (never
++// conditionally), so the partial-update ("just update center") and
++// full-update SDL_UpdateRect branches below it were already dead code on
++// any driver that honored the flag -- this port collapses flipScreen to
++// the single present call, via the window this surface belongs to.
++SDL_Window *window = NULL;
++
+ 
+ 
+ // flips back buffer onto screen (or updates rect)
+@@ -212,30 +236,8 @@ void flipScreen( SDL_Surface *inScreen ) {
+     if( SDL_MUSTLOCK( inScreen ) ) {
+         SDL_UnlockSurface( inScreen );
+         }
+-    
+-    if( ( inScreen->flags & SDL_DOUBLEBUF ) == SDL_DOUBLEBUF ) {
+-        // need to flip buffer
+-        SDL_Flip( inScreen );	
+-        }
+-    else if( !blowUpChanged ) {
+-        // just update center
+ 
+-        // small area in center that we actually draw in, black around it
+-        int yOffset = ( inScreen->h - totalImageHeight * blowUpFactor ) / 2;
+-        int xOffset = ( inScreen->w - width * blowUpFactor ) / 2;
+-        
+-        SDL_UpdateRect( inScreen, xOffset, yOffset, 
+-                        width * blowUpFactor, 
+-                        totalImageHeight * blowUpFactor );	
+-        }
+-    else {
+-        // update the whole thing
+-        SDL_UpdateRect( inScreen, 0, 0, inScreen->w, inScreen->h );
+-        
+-        // reset flag
+-        blowUpChanged = false;
+-        }
+-    
++    SDL_UpdateWindowSurface( window );
+     }
+ 
+ 
+@@ -243,7 +245,7 @@ void flipScreen( SDL_Surface *inScreen ) {
+ void lockScreen( SDL_Surface * inScreen ) {
+     // check if we need to lock the screen
+     if( SDL_MUSTLOCK( inScreen ) ) {
+-        if( SDL_LockSurface( inScreen ) < 0 ) {
++        if( ! SDL_LockSurface( inScreen ) ) {
+             printf( "Couldn't lock screen: %s\n", SDL_GetError() );
+             }
+         }
+@@ -252,35 +254,14 @@ void lockScreen( SDL_Surface * inScreen ) {
+ 
+ 
+ void flipGameImageOntoScreen( SDL_Surface *inScreen ) {
+-        
+-    if( blowUpChanged 
+-	&&
+-	( inScreen->flags & SDL_DOUBLEBUF ) == SDL_DOUBLEBUF ) {
+-   
+-        // blow up size has changed, and we are double-buffered
+-        // flip onto screen an additional time.
+-        // This will cause us to black-out the background in both buffers.
+-
+-        lockScreen( inScreen );
+-	
+-	// when blow-up factor changes:
+-	// clear screen to prepare for next draw, 
+-	// which will be bigger or smaller
+-	SDL_FillRect( inScreen, NULL, 0x00000000 );
+-        
+-	blowupOntoScreen( gameImage, 
+-			  width, totalImageHeight, blowUpFactor, inScreen );
+-    
+-	flipScreen( inScreen );
+-        }
+ 
+     lockScreen( inScreen );
+     if( blowUpChanged ) {
+-        SDL_FillRect( inScreen, NULL, 0x00000000 );
++        SDL_FillSurfaceRect( inScreen, NULL, 0x00000000 );
+         }
+-    blowupOntoScreen( gameImage, 
++    blowupOntoScreen( gameImage,
+ 		      width, totalImageHeight, blowUpFactor, inScreen );
+-    
++
+     flipScreen( inScreen );
+ 
+     // we've handled any blow up change
+@@ -303,32 +284,47 @@ char playGame();
+ 
+ 
+ void createScreen() {
+-    if( screen != NULL ) {
+-        // destroy old one first
+-        SDL_FreeSurface( screen );
++    if( window != NULL ) {
++        // destroy old one first (also destroys its window surface)
++        SDL_DestroyWindow( window );
++        screen = NULL;
+         }
+ 
+     int displayW = width * blowUpFactor;
+     int displayH = totalImageHeight * blowUpFactor;
+ 
+-    
+-    Uint32 flags = SDL_HWSURFACE | SDL_DOUBLEBUF;
++    SDL_WindowFlags flags = 0;
+     if( fullScreen ) {
+-        flags = flags | SDL_FULLSCREEN;
+-    
++        flags = flags | SDL_WINDOW_FULLSCREEN;
++
+         // use letterbox mode in full screen
+         displayW = screenWidth;
+         displayH = screenHeight;
+         }
+-    
+-    
+ 
+-    screen = SDL_SetVideoMode( displayW, displayH, 
+-                               32, 
+-                               flags );
+-    
++#ifdef __DJGPP__
++    // DOS-PORT: fullscreen is the only mode the DOS backend supports
++    // (there is no windowed VGA/VESA concept) -- force it regardless of
++    // the 'f' key toggle below.
++    fullScreen = true;
++    flags = flags | SDL_WINDOW_FULLSCREEN;
++    displayW = screenWidth;
++    displayH = screenHeight;
++#endif
++
++    window = SDL_CreateWindow( "Passage", displayW, displayH, flags );
++
++    if( window == NULL ) {
++        printf( "Couldn't create %dx%d window: %s\n", displayW,
++                displayH,
++                SDL_GetError() );
++        return;
++        }
++
++    screen = SDL_GetWindowSurface( window );
++
+     if ( screen == NULL ) {
+-        printf( "Couldn't set %dx%dx32 video mode: %s\n", displayW, 
++        printf( "Couldn't get %dx%d window surface: %s\n", displayW,
+                 displayH,
+                 SDL_GetError() );
+         }
+@@ -342,24 +338,35 @@ int mainFunction( int inArgCount, char **inArgs ) {
+     signal( SIGINT, catch_int );
+ 
+ 
+-    Uint32 initFlags = 
+-        SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_NOPARACHUTE;
+-    
++#ifdef __DJGPP__
++    // DOS-PORT: without this, SDL3-DOS's window-surface flush silently
++    // writes nowhere visible despite SDL_UpdateWindowSurface reporting
++    // success (see .sdl-dos-ports/shared/patches/sdl3-dos/README.md and
++    // <SDL3/SDL_dosvesa_directaccess.h>'s "When to use this" section).
++    // Must be set before SDL_Init.
++    SDL_SetHint( SDL_HINT_DOS_ALLOW_DIRECT_FRAMEBUFFER, "1" );
++#endif
++
++    // DOS-PORT: SDL3 removed SDL_INIT_NOPARACHUTE (no signal-handler
++    // "parachute" concept in SDL3 at all).
++    Uint32 initFlags =
++        SDL_INIT_VIDEO | SDL_INIT_JOYSTICK;
++
+     #ifdef __mac__
+         // SDL_Init is dreadfully slow if we try to init JOYSTICK on MacOSX
+-        // not sure why---maybe it's searching all devices or something like 
++        // not sure why---maybe it's searching all devices or something like
+         // that.
+         // Couldn't find anything online about this.
+-        initFlags = 
+-	    SDL_INIT_VIDEO | SDL_INIT_NOPARACHUTE;
++        initFlags =
++	    SDL_INIT_VIDEO;
+     #endif
+-    
+-    if( SDL_Init( initFlags ) < 0 ) {
++
++    if( ! SDL_Init( initFlags ) ) {
+         printf( "Couldn't initialize SDL: %s\n", SDL_GetError() );
+         return -1;
+         }
+-    
+-    SDL_ShowCursor( SDL_DISABLE );
++
++    SDL_HideCursor();
+ 
+ 
+     // read screen size from settings
+@@ -408,27 +415,34 @@ int mainFunction( int inArgCount, char **inArgs ) {
+     
+ 
+     // try to open joystick
+-    int numJoysticks = SDL_NumJoysticks();
++    // DOS-PORT: SDL3 replaced sequential-index joystick lookup with an
++    // instance-ID array (SDL_GetJoysticks); SDL_JoystickOpen(0) becomes
++    // SDL_OpenJoystick(firstInstanceID).
++    int numJoysticks = 0;
++    SDL_JoystickID *joystickIDs = SDL_GetJoysticks( &numJoysticks );
+     printf( "Found %d joysticks\n", numJoysticks );
+-    
++
+     if( numJoysticks > 0 ) {
+         // open first one by default
+-        joystick = SDL_JoystickOpen( 0 );
+-    
++        joystick = SDL_OpenJoystick( joystickIDs[0] );
++
+         if( joystick == NULL ) {
+ 	    printf( "Couldn't open joystick 0: %s\n", SDL_GetError() );
+             }
+-        int numHats = SDL_JoystickNumHats( joystick );
+-        
+-        if( numHats <= 0 ) {
+-            printf( "No d-pad found on joystick\n" );
+-            SDL_JoystickClose( joystick );
+-            joystick = NULL;
++        else {
++            int numHats = SDL_GetNumJoystickHats( joystick );
++
++            if( numHats <= 0 ) {
++                printf( "No d-pad found on joystick\n" );
++                SDL_CloseJoystick( joystick );
++                joystick = NULL;
++                }
+             }
+         }
+     else {
+         joystick = NULL;
+         }
++    SDL_free( joystickIDs );
+ 
+ 
+     
+@@ -479,9 +493,9 @@ int mainFunction( int inArgCount, char **inArgs ) {
+     
+ 
+     if( joystick != NULL ) {
+-        SDL_JoystickClose( joystick );
++        SDL_CloseJoystick( joystick );
+         }
+-    
++
+     SDL_Quit();
+ 
+     return 0;
+@@ -705,7 +719,7 @@ char playGame() {
+ 
+     while( !done ) {
+         
+-        if( getKeyDown( SDLK_s ) ) {
++        if( getKeyDown( SDL_SCANCODE_S ) ) {
+             stepDX = false;
+             }
+         else {
+@@ -955,18 +969,18 @@ char playGame() {
+             movingThisFrame = ( frameCount % 2 == 0 );
+             }
+         
+-        if( getKeyDown( SDLK_p ) && canPause ) {
++        if( getKeyDown( SDL_SCANCODE_P ) && canPause ) {
+             paused = true;
+             }
+-        if( getKeyDown( SDLK_o ) ) {
++        if( getKeyDown( SDL_SCANCODE_O ) ) {
+             paused = false;
+             }
+-        if( paused && getKeyDown( SDLK_i ) ) {
++        if( paused && getKeyDown( SDL_SCANCODE_I ) ) {
+             stepAnimations();
+             }
+ 
+         
+-        if( getKeyDown( SDLK_b ) ) {
++        if( getKeyDown( SDL_SCANCODE_B ) ) {
+             // adjust blowup factor
+             blowUpFactor += blowUpStep;
+             
+@@ -991,7 +1005,7 @@ char playGame() {
+ 
+             }
+ 
+-        if( getKeyDown( SDLK_f ) ) {
++        if( getKeyDown( SDL_SCANCODE_F ) ) {
+             // toggle fullscreen mode
+             fullScreen = ! fullScreen;
+             
+@@ -1001,7 +1015,7 @@ char playGame() {
+         
+             
+ 
+-        if( getKeyDown( SDLK_LEFT ) || getJoyPushed( SDL_HAT_LEFT ) ) {
++        if( getKeyDown( SDL_SCANCODE_LEFT ) || getJoyPushed( SDL_HAT_LEFT ) ) {
+             char notBlocked = 
+                 !isBlocked( (int)( playerX - moveDelta ), (int)playerY );
+             
+@@ -1033,7 +1047,7 @@ char playGame() {
+                     }
+                 }
+             }
+-        else if( getKeyDown( SDLK_RIGHT ) || getJoyPushed( SDL_HAT_RIGHT )) {
++        else if( getKeyDown( SDL_SCANCODE_RIGHT ) || getJoyPushed( SDL_HAT_RIGHT )) {
+             char notBlocked = 
+                 !isBlocked( (int)( playerX + moveDelta ), (int)playerY );
+ 
+@@ -1058,7 +1072,7 @@ char playGame() {
+                     }  
+                 }
+             }
+-        else if( getKeyDown( SDLK_UP ) || getJoyPushed( SDL_HAT_UP ) ) {
++        else if( getKeyDown( SDL_SCANCODE_UP ) || getJoyPushed( SDL_HAT_UP ) ) {
+             char notBlocked =
+                 !isBlocked( (int)playerX, (int)( playerY - moveDelta ) );
+             
+@@ -1090,7 +1104,7 @@ char playGame() {
+                     }
+                 }
+             }
+-        else if( getKeyDown( SDLK_DOWN )  || getJoyPushed( SDL_HAT_DOWN )) {
++        else if( getKeyDown( SDL_SCANCODE_DOWN )  || getJoyPushed( SDL_HAT_DOWN )) {
+             char notBlocked = 
+                 !isBlocked( (int)playerX, (int)( playerY + moveDelta ) );
+             
+@@ -1127,9 +1141,9 @@ char playGame() {
+         SDL_Event event;
+         while( SDL_PollEvent(&event) ) {
+             switch( event.type ) {
+-                case SDL_KEYDOWN:
+-                    switch( event.key.keysym.sym ) {
+-                        case SDLK_q:
++                case SDL_EVENT_KEY_DOWN:
++                    switch( event.key.key ) {
++                        case SDLK_Q:
+                         case SDLK_ESCAPE:
+                             done = true;
+                             quit = true;
+@@ -1138,7 +1152,7 @@ char playGame() {
+                             break;
+                         }
+                     break;
+-                case SDL_QUIT:
++                case SDL_EVENT_QUIT:
+                     done = true;
+                     quit = true;
+                     break;
+diff --git a/gameSource/musicPlayer.cpp b/gameSource/musicPlayer.cpp
+index 16eacba..4b6f13c 100644
+--- a/gameSource/musicPlayer.cpp
++++ b/gameSource/musicPlayer.cpp
+@@ -7,8 +7,7 @@
+ 
+ 
+ 
+-#include <SDL/SDL.h>
+-#include <SDL/SDL_audio.h>
++#include <SDL3/SDL.h>
+ 
+ #include <math.h>
+ #include <stdlib.h>
+@@ -103,40 +102,50 @@ Note ***noteGrid;
+ SimpleVector<Note*> currentlyPlayingNotes;
+ 
+ 
++// DOS-PORT: SDL3 has no global SDL_LockAudio/SDL_CloseAudio -- audio is
++// per-stream now. audioStream is the handle setMusicLoudness/restartMusic/
++// stopMusic all operate on; set once by startMusic.
++SDL_AudioStream *audioStream = NULL;
++
+ 
+ // need to synch these with audio thread
+ 
+ void setMusicLoudness( double inLoudness ) {
+-    SDL_LockAudio();
+-    
++    SDL_LockAudioStream( audioStream );
++
+     musicLoudness = inLoudness;
+-    
+-    SDL_UnlockAudio();
++
++    SDL_UnlockAudioStream( audioStream );
+     }
+ 
+ 
+ 
+ void restartMusic() {
+-    SDL_LockAudio();
++    SDL_LockAudioStream( audioStream );
+ 
+     // return to beginning (and forget samples we've played so far)
+     streamSamples = 0;
+-    
++
+     // drop all currently-playing notes
+     currentlyPlayingNotes.deleteAll();
+-        
+-    SDL_UnlockAudio();
++
++    SDL_UnlockAudioStream( audioStream );
+     }
+ 
+ 
+ 
+ 
+-// called by SDL to get more samples
+-void audioCallback( void *inUserData, Uint8 *inStream, int inLengthToFill ) {
+-    
+-    // 2 bytes for each channel of stereo sample
+-    int numSamples = inLengthToFill / 4;
+-    
++// DOS-PORT: SDL3's SDL_OpenAudioDeviceStream callback is a "pull" model --
++// SDL tells us how many additional bytes it wants (inAdditionalAmount) and
++// we push exactly that much (or more) via SDL_PutAudioStreamData, rather
++// than writing directly into a buffer SDL handed us (SDL1.2's model).
++void audioCallback( void *inUserData, SDL_AudioStream *inStream,
++                    int inAdditionalAmount, int inTotalAmount ) {
++
++    // 2 bytes for each channel of stereo sample; round up to a whole
++    // number of frames so we always provide at least what was requested
++    int numSamples = ( inAdditionalAmount + 3 ) / 4;
++
+ 
+     Sint16 *samplesL = new Sint16[ numSamples ];
+     Sint16 *samplesR = new Sint16[ numSamples ];
+@@ -286,24 +295,29 @@ void audioCallback( void *inUserData, Uint8 *inStream, int inLengthToFill ) {
+         }
+ 
+ 
+-    // now copy samples into Uint8 buffer
++    // now copy samples into a Uint8 buffer and push it into the stream
++    // (DOS-PORT: SDL3's pull-callback model -- see the comment above)
++    Uint8 *outputBuffer = new Uint8[ numSamples * 4 ];
+     int streamPosition = 0;
+     for( i=0; i != numSamples; i++ ) {
+         Sint16 intSampleL = samplesL[i];
+         Sint16 intSampleR = samplesR[i];
+-        
+-        inStream[ streamPosition ] = (Uint8)( intSampleL & 0xFF );
+-        inStream[ streamPosition + 1 ] = (Uint8)( ( intSampleL >> 8 ) & 0xFF );
+-        
+-        inStream[ streamPosition + 2 ] = (Uint8)( intSampleR & 0xFF );
+-        inStream[ streamPosition + 3 ] = (Uint8)( ( intSampleR >> 8 ) & 0xFF );
+-        
++
++        outputBuffer[ streamPosition ] = (Uint8)( intSampleL & 0xFF );
++        outputBuffer[ streamPosition + 1 ] = (Uint8)( ( intSampleL >> 8 ) & 0xFF );
++
++        outputBuffer[ streamPosition + 2 ] = (Uint8)( intSampleR & 0xFF );
++        outputBuffer[ streamPosition + 3 ] = (Uint8)( ( intSampleR >> 8 ) & 0xFF );
++
+         streamPosition += 4;
+         }
+ 
++    SDL_PutAudioStreamData( inStream, outputBuffer, numSamples * 4 );
++
++    delete [] outputBuffer;
+     delete [] samplesL;
+     delete [] samplesR;
+-    
++
+     }
+ 
+ 
+@@ -590,27 +604,31 @@ void startMusic( const char *inTGAFileName ) {
+ 
+     /* Set 16-bit stereo audio at 22Khz */
+     audioFormat.freq = sampleRate;
+-    audioFormat.format = AUDIO_S16;
++    audioFormat.format = SDL_AUDIO_S16;
+     audioFormat.channels = 2;
+-    audioFormat.samples = 512;        /* A good value for games */
+-    audioFormat.callback = audioCallback;
+-    audioFormat.userdata = NULL;
+ 
+-    /* Open the audio device and start playing sound! */
+-    if( SDL_OpenAudio( &audioFormat, NULL ) < 0 ) {
++    /* DOS-PORT: SDL3 opens a device+callback pair via
++       SDL_OpenAudioDeviceStream (SDL1.2's samples/callback/userdata
++       fields moved out of SDL_AudioSpec and into this call's own
++       arguments). */
++    audioStream = SDL_OpenAudioDeviceStream( SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
++                                              &audioFormat,
++                                              audioCallback, NULL );
++
++    if( audioStream == NULL ) {
+         printf( "Unable to open audio: %s\n", SDL_GetError() );
++        return;
+         }
+ 
+-    // set pause to 0 to start audio
+-    SDL_PauseAudio(0);
+-    
+-    
++    // DOS-PORT: SDL_OpenAudioDeviceStream opens the device paused.
++    SDL_ResumeAudioDevice( SDL_GetAudioStreamDevice( audioStream ) );
+     }
+ 
+ 
+ 
+ void stopMusic() {
+-    SDL_CloseAudio();
++    SDL_DestroyAudioStream( audioStream );
++    audioStream = NULL;
+ 
+     if( musicImage != NULL ) {
+         delete musicImage;
+-- 
+2.47.3
+

@@ -1,0 +1,25 @@
+# vendor/binaries.manifest -- pinned upstream DOS binaries fetched by
+# scripts/fetch-vendor-binaries.sh. Mirror of vendor/sources.manifest's
+# pin-by-hash discipline, but for redistributable pre-built binaries
+# rather than git clones.
+#
+# Format (whitespace-separated, one entry per line, '#' for comments):
+#
+#     <path>  <url>  <sha256>
+#
+# <path>    destination path relative to repo root
+# <url>     canonical fetch URL. If it ends in `#<member>`, the URL is a
+#           zip archive and `<member>` is the path inside the archive to
+#           extract to <path>.
+# <sha256>  64-char hex digest of the bytes that should land at <path>
+#           after the fetch + (optional) unzip step.
+#
+# License notes -- CWSDPMI.DOC (its redistribution terms) stays tracked in
+# git; only the binary itself is managed here.
+#
+# Provenance: this entry (URL + sha256) is the same pin doskutsu's own
+# vendor/binaries.manifest already verified and uses -- reused directly
+# rather than re-fetched-and-re-guessed, since it's the same CWSDPMI
+# release both ports need.
+
+vendor/cwsdpmi/cwsdpmi.exe     https://sandmann.dotster.com/cwsdpmi/csdpmi7b.zip#bin/CWSDPMI.EXE     2de899fecaa90632b8b9bdfc0305cb0375e59ae252c37e32d06c1ed3f98a8f44

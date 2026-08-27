@@ -13,11 +13,11 @@
 /vendor/passage/
 /vendor/minorgems/
 
-# CWSDPMI (and any other redistributable-binary vendor deps) -- fetched by
-# a future scripts/fetch-vendor-binaries.sh + vendor/binaries.manifest,
-# same pattern as doskutsu. Add specific negations for the .doc/license
-# files that must stay tracked once that script exists.
+# CWSDPMI -- fetched by scripts/fetch-vendor-binaries.sh +
+# vendor/binaries.manifest, same pattern as doskutsu. cwsdpmi.doc (its
+# redistribution terms) stays tracked; the binary itself does not.
 /vendor/cwsdpmi/*.exe
+!vendor/cwsdpmi/cwsdpmi.doc
 
 # Symlink to the ~/emulators/ hub (recreated by scripts/setup-symlinks.sh)
 /tools/djgpp

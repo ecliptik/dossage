@@ -1,0 +1,241 @@
+From c0e0d301ddeb08d6127da26683d5ad710ad2095e Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Wed, 26 Aug 2026 16:40:41 -0700
+Subject: [PATCH] dos: add DJGPP platform support for Path/Time/Thread + endian
+ detection
+
+DJGPP's libc is POSIX-compatible enough that Path and Time are
+identical to the linux/ variants (realpath and gettimeofday are both
+present). Thread has no pthreads on DOS -- staticSleep() is the only
+call site anywhere in Passage's gameSource/, so start()/join() are a
+synchronous fallback rather than real threading, matching the
+SDL3-DOS backend's cooperative-scheduler / threading-zero invariant.
+
+system/endian.h's per-platform ladder had no DJGPP branch and fell
+through to the "linux case" (#include <endian.h>), which doesn't
+exist in DJGPP's libc. Added a __DJGPP__ branch alongside the
+existing WIN32 one -- DJGPP only ever targets x86, which is always
+little-endian, so this is a one-way #define, not a runtime check.
+---
+ io/file/dos/PathDOS.cpp  | 72 ++++++++++++++++++++++++++++++++++++++++
+ system/dos/ThreadDOS.cpp | 59 ++++++++++++++++++++++++++++++++
+ system/dos/TimeDOS.cpp   | 40 ++++++++++++++++++++++
+ system/endian.h          | 10 ++++++
+ 4 files changed, 181 insertions(+)
+ create mode 100644 io/file/dos/PathDOS.cpp
+ create mode 100644 system/dos/ThreadDOS.cpp
+ create mode 100644 system/dos/TimeDOS.cpp
+
+diff --git a/io/file/dos/PathDOS.cpp b/io/file/dos/PathDOS.cpp
+new file mode 100644
+index 0000000..c37052f
+--- /dev/null
++++ b/io/file/dos/PathDOS.cpp
+@@ -0,0 +1,72 @@
++/*
++ * DOS/DJGPP platform implementation, added for the dossage port.
++ *
++ * DJGPP's libc is POSIX-compatible enough that this is identical to
++ * linux/PathLinux.cpp -- DJGPP provides realpath() (see
++ * i586-pc-msdosdjgpp/sys-include/stdlib.h) and Passage/minorGems only ever
++ * construct paths from forward-slash-delimited relative strings (e.g.
++ * "graphics/tileSet.tga"), so the '/' delimiter and POSIX-style absolute-
++ * root handling apply unchanged.
++ */
++
++
++#include "minorGems/io/file/Path.h"
++#include "minorGems/util/stringUtils.h"
++
++#include <stdlib.h>
++
++
++
++char Path::getDelimeter() {
++	return '/';
++	}
++
++
++
++char *Path::getAbsoluteRoot( int *outLength ) {
++	char *returnString = new char[1];
++	returnString[0] = '/';
++
++    *outLength = 1;
++
++	return returnString;
++	}
++
++
++
++char Path::isAbsolute( const char *inPathString ) {
++    if( inPathString[0] == '/' ) {
++        return true;
++        }
++    else {
++        return false;
++        }
++    }
++
++
++
++char *Path::extractRoot( const char *inPathString ) {
++    if( isAbsolute( inPathString )  ){
++        return stringDuplicate( "/" );
++        }
++    else {
++        return NULL;
++        }
++    }
++
++
++
++char Path::isRoot( const char *inPathString ) {
++    if( strcmp( inPathString, "/" ) == 0 ) {
++        return true;
++        }
++    else {
++        return false;
++        }
++    }
++
++
++
++char *Path::makeAbsolute( const char *inPathString ) {
++    return realpath( inPathString, NULL );
++    }
+diff --git a/system/dos/ThreadDOS.cpp b/system/dos/ThreadDOS.cpp
+new file mode 100644
+index 0000000..125966d
+--- /dev/null
++++ b/system/dos/ThreadDOS.cpp
+@@ -0,0 +1,59 @@
++/*
++ * DOS/DJGPP platform implementation, added for the dossage port.
++ *
++ * DJGPP has no pthreads (no preemptive threading on DOS at all), and
++ * SDL3's DOS backend is built around a cooperative scheduler that
++ * assumes the game never spawns real threads (see sdl-dos-ports'
++ * CLAUDE.md "threading-zero invariant", inherited from doskutsu).
++ * Passage itself never instantiates a Thread subclass or calls
++ * start()/join() anywhere in gameSource/ -- the only live call site is
++ * Thread::staticSleep() in game.cpp's frame-pacing code. This
++ * implementation exists to keep the class linkable (in case that ever
++ * changes) without pretending DOS has real concurrency: start() runs
++ * synchronously and join() is a no-op. Do not turn this into a real
++ * threading implementation -- if a future patch needs actual
++ * concurrency on DOS, that is a SDL3-DOS backend design question, not a
++ * one-file fix here.
++ */
++
++
++#include "minorGems/system/Thread.h"
++
++#include <unistd.h>
++#include <stdio.h>
++
++
++
++Thread::Thread() {
++    mNativeObjectPointer = NULL;
++    }
++
++
++
++Thread::~Thread() {
++    }
++
++
++
++void Thread::start( char inDetach ) {
++    mIsDetached = inDetach;
++
++    // No real threading on DOS -- run synchronously. See file header.
++    run();
++
++    if( mIsDetached ) {
++        delete this;
++        }
++    }
++
++
++
++void Thread::join() {
++    // start() already ran to completion synchronously; nothing to wait on.
++    }
++
++
++
++void Thread::staticSleep( unsigned long inTimeInMilliseconds ) {
++    usleep( inTimeInMilliseconds * 1000 );
++    }
+diff --git a/system/dos/TimeDOS.cpp b/system/dos/TimeDOS.cpp
+new file mode 100644
+index 0000000..21cf08c
+--- /dev/null
++++ b/system/dos/TimeDOS.cpp
+@@ -0,0 +1,40 @@
++/*
++ * DOS/DJGPP platform implementation, added for the dossage port.
++ *
++ * Identical to system/unix/TimeUnix.cpp -- DJGPP's libc provides
++ * gettimeofday() (see i586-pc-msdosdjgpp/sys-include/sys/time.h),
++ * unchanged from the POSIX call this file already used.
++ */
++
++
++#include "minorGems/system/Time.h"
++
++
++#include <time.h>
++
++#include <sys/time.h>
++
++#include <unistd.h>
++
++#include <stdio.h>
++
++
++char Time::sEpochTimeSet = false;
++
++// C standard says that -1 is a valid time_t value
++time_t Time::sEpochTime = (time_t)( -1 );
++
++
++void Time::getCurrentTime( timeSec_t *outSeconds,
++						   unsigned long *outMilliseconds ) {
++
++	struct timeval currentTime;
++
++    gettimeofday( &currentTime, NULL );
++
++
++	*outMilliseconds = currentTime.tv_usec / 1000;
++
++
++    *outSeconds = normalize( currentTime.tv_sec );
++	}
+diff --git a/system/endian.h b/system/endian.h
+index a9ae717..be51239 100644
+--- a/system/endian.h
++++ b/system/endian.h
+@@ -78,6 +78,16 @@
+ 
+ 
+ 
++#elif defined(__DJGPP__)
++// DOS case, added for the dossage port -- DJGPP targets x86 only, which
++// is always little-endian, and DJGPP's libc has no <endian.h>.
++#define __LITTLE_ENDIAN 1234
++#define __BYTE_ORDER __LITTLE_ENDIAN
++
++// end DOS case
++
++
++
+ #else
+ // linux case
+ #include <endian.h>
+-- 
+2.47.3
+

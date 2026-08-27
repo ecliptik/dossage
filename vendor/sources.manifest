@@ -20,11 +20,13 @@
 # added the DOS backend.
 SDL            https://github.com/libsdl-org/SDL.git             main             74a746281f2208e07a7680560fcb7ec57565228e
 
-# SDL3_mixer release-3.2.x, same pin as doskutsu's own manifest. Passage's
-# own audio is a from-scratch software synth over a raw sample callback --
-# no file-decode codecs are needed -- but SDL3_mixer's audio-device/stream
-# plumbing is still the DOS-proven path for opening the audio device.
-SDL_mixer      https://github.com/libsdl-org/SDL_mixer.git       release-3.2.x    e69654e9eac6d07ec5dfb9d9db022e836d3d1e11
+# NOTE: SDL3_mixer is deliberately NOT vendored (confirmed once the actual
+# SDL 1.2 -> SDL3 migration was done, see patches/passage/0001). Passage's
+# audio is a from-scratch software synth over a raw sample callback, opened
+# directly against core SDL3's SDL_OpenAudioDeviceStream -- that reaches
+# the DOS backend's SB16/OPL/GUS devices on its own; SDL3_mixer only adds
+# file-format decode / multi-channel mixing convenience on top, neither of
+# which this port uses. Do not add it back without a concrete reason.
 
 # NOTE: SDL_image is deliberately NOT vendored. Passage's .tga graphics are
 # decoded by minorGems' own TGAImageConverter (a small, self-contained

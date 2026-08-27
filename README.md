@@ -10,7 +10,7 @@ DOSSAGE exists for preservation and the engineering challenge of running Passage
 
 ## Status
 
-**BOOTSTRAP.** Repository scaffolding is in place (this commit); the cross-build and DOS port itself have not started yet. See [PLAN.md](./PLAN.md) and this port's entry in the hub's [ports.yaml](https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports/src/branch/main/ports.yaml) for current milestone state, and [STATUS.md](./STATUS.md) for the structured summary.
+**PLAYABLE.** The SDL 1.2 -> SDL3 migration and DJGPP platform port compiled and linked clean, and boots to the title screen and into gameplay under DOSBox-X -- verified 2026-08-26. No real-hardware run yet. See [PLAN.md](./PLAN.md) and this port's entry in the hub's [ports.yaml](https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports/src/branch/main/ports.yaml) for current milestone state, and [STATUS.md](./STATUS.md) for the structured summary.
 
 **Target.** Passage's own source (`gameSource/game.cpp`) locks a `lockedFrameRate` of **15 fps** -- much lower than doskutsu's 50 fps design rate -- so this port's performance bar is hitting that original 15 fps, sustained, on the DOS minimum/recommended target below, rather than chasing the highest frame rate possible.
 
