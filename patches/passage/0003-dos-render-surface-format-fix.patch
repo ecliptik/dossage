@@ -1,0 +1,141 @@
+From 656715ef6e13a98ab524b86cc90cea4b5612e591 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Wed, 26 Aug 2026 18:33:26 -0700
+Subject: [PATCH] dos: render into a known-format surface, blit-convert onto
+ the window
+
+Real-hardware finding (vcctrl, 2026-08-26): DOSSAGE.EXE's video is
+corrupted on the actual Mach64 rig -- a stable horizontal band with
+vertical-line tearing exactly where the title/gameplay content
+should render, shifting in response to input (confirming the game
+loop runs and writes real data, just interpreted wrong). DOSBox-X
+renders the identical build correctly.
+
+Root cause: the original SDL1.2 code explicitly forced 32bpp via
+SDL_SetVideoMode(w, h, 32, flags), and blowUp.cpp writes directly
+into SDL_Surface->pixels as raw Uint32*, assuming XRGB8888 layout.
+SDL3's SDL_CreateWindow has no bpp parameter -- the actual window
+surface format tracks whatever VESA mode SDL's closest-mode matching
+picked (see vendor/SDL's SDL_dosframebuffer.c:
+"const SDL_PixelFormat surface_format = mode->format;"). DOSBox-X's
+software VESA BIOS happens to pick a mode compatible with the raw
+32-bit-write assumption; this rig's real Mach64 VESA BIOS picks a
+different one, and the mismatch corrupts every pixel write.
+
+Fix: always render into our own explicitly-created
+SDL_PIXELFORMAT_XRGB8888 surface (renderSurface), then
+SDL_BlitSurface it onto the real window surface at present time --
+SDL handles the format conversion. This is the "single conversion if
+necessary" pattern .sdl-dos-ports/docs/video.md recommends, and it
+makes correctness independent of which VESA mode gets auto-selected
+on any given card.
+
+Reverified under DOSBox-X: no regression, title screen and gameplay
+both still render correctly. Real-hardware reverification (does this
+actually fix the corruption on the Mach64 rig) is the next step, via
+vcctrl.
+---
+ gameSource/game.cpp | 53 ++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 45 insertions(+), 8 deletions(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 144534f..10278fe 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -229,23 +229,43 @@ SDL_Window *window = NULL;
+ 
+ 
+ 
++// DOS-PORT: the real window surface's pixel format tracks whichever VESA
++// mode SDL negotiated (see vendor/SDL's SDL_dosframebuffer.c:
++// "const SDL_PixelFormat surface_format = mode->format;") -- it is NOT
++// guaranteed to be 32bpp XRGB, which is what blowupOntoScreen's raw
++// Uint32-pointer writes assume (matching the original SDL1.2 code's
++// explicit SDL_SetVideoMode(..., 32, ...) request -- SDL3's
++// SDL_CreateWindow has no bpp parameter). DOSBox-X's software VESA BIOS
++// happened to pick a compatible mode; confirmed on real Mach64 hardware
++// it does not, producing a corrupted, torn image (real-HW finding via
++// vcctrl, 2026-08-26). Fix: always render into our own known-format
++// (XRGB8888) surface, then blit-convert onto the real window surface at
++// present time -- the "single conversion if necessary" pattern
++// .sdl-dos-ports/docs/video.md recommends.
++SDL_Surface *renderSurface = NULL;
++
++
++
+ // flips back buffer onto screen (or updates rect)
+ void flipScreen( SDL_Surface *inScreen ) {
+ 
+-    // unlock the screen if necessary
+-    if( SDL_MUSTLOCK( inScreen ) ) {
+-        SDL_UnlockSurface( inScreen );
++    // unlock the render surface if necessary
++    if( SDL_MUSTLOCK( renderSurface ) ) {
++        SDL_UnlockSurface( renderSurface );
+         }
+ 
++    SDL_BlitSurface( renderSurface, NULL, inScreen, NULL );
++
+     SDL_UpdateWindowSurface( window );
+     }
+ 
+ 
+ 
+ void lockScreen( SDL_Surface * inScreen ) {
+-    // check if we need to lock the screen
+-    if( SDL_MUSTLOCK( inScreen ) ) {
+-        if( ! SDL_LockSurface( inScreen ) ) {
++    // check if we need to lock the render surface (not the window
++    // surface -- see renderSurface above)
++    if( SDL_MUSTLOCK( renderSurface ) ) {
++        if( ! SDL_LockSurface( renderSurface ) ) {
+             printf( "Couldn't lock screen: %s\n", SDL_GetError() );
+             }
+         }
+@@ -257,10 +277,10 @@ void flipGameImageOntoScreen( SDL_Surface *inScreen ) {
+ 
+     lockScreen( inScreen );
+     if( blowUpChanged ) {
+-        SDL_FillSurfaceRect( inScreen, NULL, 0x00000000 );
++        SDL_FillSurfaceRect( renderSurface, NULL, 0x00000000 );
+         }
+     blowupOntoScreen( gameImage,
+-		      width, totalImageHeight, blowUpFactor, inScreen );
++		      width, totalImageHeight, blowUpFactor, renderSurface );
+ 
+     flipScreen( inScreen );
+ 
+@@ -289,6 +309,10 @@ void createScreen() {
+         SDL_DestroyWindow( window );
+         screen = NULL;
+         }
++    if( renderSurface != NULL ) {
++        SDL_DestroySurface( renderSurface );
++        renderSurface = NULL;
++        }
+ 
+     int displayW = width * blowUpFactor;
+     int displayH = totalImageHeight * blowUpFactor;
+@@ -327,6 +351,19 @@ void createScreen() {
+         printf( "Couldn't get %dx%d window surface: %s\n", displayW,
+                 displayH,
+                 SDL_GetError() );
++        return;
++        }
++
++    // DOS-PORT: see the renderSurface comment above flipScreen() -- this
++    // guarantees a known pixel format for blowupOntoScreen's raw writes
++    // regardless of what format the real window surface turned out to be.
++    renderSurface = SDL_CreateSurface( displayW, displayH,
++                                        SDL_PIXELFORMAT_XRGB8888 );
++
++    if( renderSurface == NULL ) {
++        printf( "Couldn't create %dx%d render surface: %s\n", displayW,
++                displayH,
++                SDL_GetError() );
+         }
+     }
+ 
+-- 
+2.47.3
+
