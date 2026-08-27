@@ -1,0 +1,58 @@
+From 38c96f5cc821b43b77e62f167fc69d2b71915a0c Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Wed, 26 Aug 2026 19:49:57 -0700
+Subject: [PATCH] dos: enable window-surface vsync to avoid tearing on banked
+ VESA hardware
+
+Passage's SDL3 port never calls SDL_SetWindowSurfaceVSync, so it
+defaults to SDL_WINDOW_SURFACE_VSYNC_DISABLED. On most platforms this
+doesn't matter -- the windowing system's own present mechanism handles
+tearing. On this DOS backend's banked-VESA present path, though,
+DOSVESA_UpdateWindowFramebuffer only issues a WaitForVBlank() before
+the bank-by-bank copy when windata->framebuffer_vsync is nonzero
+(SDL/0116's bounded-vblank machinery), and that field is only ever set
+via this exact API. Left unset, each frame's flush writes directly
+into the buffer the CRTC is actively scanning with no synchronization
+at all.
+
+Real banked-VESA hardware (unlike DOSBox-X's software VESA emulation,
+which swaps buffers instantaneously and has no scanout-timing model)
+can therefore tear wherever the flip happens to land in the refresh
+cycle -- and land at a *consistent* row every time, since Passage's
+fixed ~15fps main loop phase-locks the flip to roughly the same point
+in the cycle frame after frame. This matches a real-hardware video
+corruption report at consistent rows that neither a pixel-format fix
+nor bank-crossing/blit-conversion analysis explained.
+
+Fix: opt in to normal vsync right after window creation, DOS-only
+(other platforms' native present paths don't need this and SDL's own
+default is deliberately conservative).
+---
+ gameSource/game.cpp | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 10278fe..b92f82f 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -345,6 +345,17 @@ void createScreen() {
+         return;
+         }
+ 
++#ifdef __DJGPP__
++    // DOS-PORT: the banked-framebuffer present path writes each VESA
++    // bank window directly into the buffer the CRTC is actively
++    // scanning, with no synchronization unless the window explicitly
++    // opts in to vsync. Without this, real banked-VESA hardware can
++    // tear at whatever screen row the flip happens to be at when it
++    // starts; DOSBox-X's software VESA emulation swaps the buffer
++    // instantaneously and never reproduces it.
++    SDL_SetWindowSurfaceVSync( window, 1 );
++#endif
++
+     screen = SDL_GetWindowSurface( window );
+ 
+     if ( screen == NULL ) {
+-- 
+2.47.3
+
