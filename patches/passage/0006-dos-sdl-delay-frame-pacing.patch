@@ -1,0 +1,58 @@
+From 80f4f6fea5f9e60ccd835c7c5fac9491c5fabe04 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 07:55:41 -0700
+Subject: [PATCH] dos: use SDL_Delay for frame pacing, not Thread::staticSleep
+
+Root cause of the whole real-hardware silent-audio investigation:
+Passage's frame-rate limiter called minorGems' Thread::staticSleep(),
+which on DOS (ThreadDOS.cpp) is a raw usleep() that bypasses SDL
+entirely. This shared DOS backend's audio playback runs on a
+cooperative-scheduler mechanism that only gets handed CPU time via
+SDL_Delay() specifically (see SDL_dosaudio_sb.c's DOS_Yield
+commentary -- the per-flip SDL_Delay(0) is the documented hook that
+lets the audio thread run at all).
+
+Since Passage never called SDL_Delay() anywhere, that cooperative
+audio pump never ran: the device opened successfully (that happens
+synchronously, before the main loop), but PlayDevice/WaitDevice never
+executed even once. Confirmed directly: SDL_HINT_DOS_SILENCE_HISTO=1
+(an existing shared-backend diagnostic) showed zero emits at all
+before this fix -- not "all silent," literally no PlayDevice calls --
+and after this fix, real emits appear with a genuine noisy_n>0 (real,
+non-silent mixed content reaching PlayDevice), confirmed under
+DOSBox-X. This explains every symptom observed across this entire
+investigation (the original live-synthesis audio, and Phase A's
+pre-rendered-buffer replacement, were both equally silent) since
+neither implementation could ever be the cause -- the callback was
+never being pumped at all, regardless of what it computed.
+
+Single call site (game.cpp's per-frame extraTime sleep); no other
+Thread::staticSleep call sites exist in gameSource/.
+---
+ gameSource/game.cpp | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index b92f82f..a077fc5 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -1002,7 +1002,15 @@ char playGame() {
+         double extraTime = 1.0 / lockedFrameRate - frameTime;
+         
+         if( extraTime > 0 ) {
+-            Thread::staticSleep( (int)( extraTime * 1000 ) );
++            // DOS-PORT: SDL_Delay, not Thread::staticSleep -- on DOS,
++            // Thread::staticSleep is a raw usleep() that bypasses SDL
++            // entirely (see ThreadDOS.cpp). This backend's cooperative
++            // audio-thread scheduler only gets CPU time via SDL_Delay
++            // (its DOS_Yield hook); without this, the audio device opens
++            // fine but PlayDevice/WaitDevice never run at all, and
++            // nothing pushed into the ring is ever mixed or played,
++            // regardless of what the audio callback computes.
++            SDL_Delay( (Uint32)( extraTime * 1000 ) );
+             }
+ 
+         // start timing next frame
+-- 
+2.47.3
+
