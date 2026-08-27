@@ -1,0 +1,76 @@
+From 11f32ad3e6cee54bbcf95b7cb5adc5200ea06743 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 08:14:37 -0700
+Subject: [PATCH] dos: pump the audio ring explicitly once per frame
+
+patch 0006 fixed Passage's cooperative-scheduler yield (SDL_Delay
+instead of Thread::staticSleep), which got PlayDevice running at all
+under DOSBox-X -- but per doskutsu's own real-hardware history, relying
+on cooperative SDL_Delay yielding alone is gap-prone on real (non-
+emulated) timing: an individual render gap can outlast the audio ring
+depth even when the engine yields correctly, causing underrun
+regardless of average frame rate. doskutsu hit this and fixed it with
+an explicit engine-side pump (nxengine-evo/0162+), calling
+SDL_DOSAudioPump() -- a real shared-backend export already vendored in
+this port's own SDL (vendor/SDL/include/SDL3/SDL_dosaudio_pump.h,
+"DOSKUTSU local addition... never upstreamed") -- once per frame in a
+`while (SDL_DOSAudioPump()) { }` loop to top the ring up to full every
+frame, rather than hoping the cooperative scheduler gets to it.
+
+Added the same call pattern to Passage's main loop, right after each
+frame's flip, guarded __DJGPP__ (DOS-only). Safe to call
+unconditionally per the export's own contract (no-op if no audio
+device is open).
+
+Verified under DOSBox-X with SDL_HINT_DOS_SILENCE_HISTO=1: PlayDevice
+activity climbs to fully non-silent (noisy_n=100/100 in the final
+100-call window observed) versus the prior fix's mixed silent/noisy
+ratio -- a stronger, more consistent result than SDL_Delay alone.
+---
+ gameSource/game.cpp | 23 ++++++++++++++++++++++-
+ 1 file changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index a077fc5..49a35d8 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -29,6 +29,17 @@ int main( int inArgCount, char **inArgs ) {
+ 
+ #include <SDL3/SDL.h>
+ 
++#ifdef __DJGPP__
++// DOS-PORT: engine-side audio-ring pump. See SDL_dosaudio_pump.h's own
++// doc comment -- the cooperative-scheduler audio thread only runs when
++// the engine yields, and on real (non-emulated) hardware a render gap
++// can outlast the ring depth even with correct SDL_Delay/yield behavior.
++// doskutsu's own history (nxengine-evo/0162+) hit exactly this and fixed
++// it by pumping the ring explicitly once per frame rather than relying
++// on cooperative scheduling alone.
++#include <SDL3/SDL_dosaudio_pump.h>
++#endif
++
+ #include "blowUp.h"
+ #include "World.h"
+ #include "map.h"
+@@ -992,7 +1003,17 @@ char playGame() {
+             
+         
+         flipGameImageOntoScreen( screen );
+-        
++
++
++#ifdef __DJGPP__
++        // DOS-PORT: top up the audio ring explicitly once per frame,
++        // rather than relying solely on the cooperative-scheduler audio
++        // thread getting yielded to (see the SDL_dosaudio_pump.h include
++        // above). Safe to call unconditionally -- a no-op if no audio
++        // device is open.
++        while( SDL_DOSAudioPump() ) { }
++#endif
++
+ 
+         // done with frame
+         double newTimestamp = Time::getCurrentTime();
+-- 
+2.47.3
+
