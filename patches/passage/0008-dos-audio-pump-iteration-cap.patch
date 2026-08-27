@@ -1,0 +1,103 @@
+From 3e754507d2978b16db63da2300bffb679da5fdb7 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 12:58:30 -0700
+Subject: [PATCH] dos: bound the per-frame audio-ring pump by iteration count,
+ not just ms
+
+Real-hardware measurement on the port's actual minimum-target CPU
+(486DX2-50, PIT-timer fallback -- confirmed via "audio IRQ timer: 8253
+PIT counter 0" in SDLDBG.LOG, no RDTSC available) showed the prior
+150ms-target-depth revision still catastrophic: 2.09 fps measured (a
+15fps KPI), while the renderer's own instrumentation shows its per-
+flush cost (~51ms average) only explains a ceiling around ~19fps. The
+~427ms/frame gap points at SDL_DOSAudioPump() itself: on hardware this
+slow, each individual call costs real, non-trivial wall-clock time
+(mixing/DMA-write work that scales with CPU speed, not with how much
+audio-time each call produces) -- so reaching even the smaller 150ms
+target still means many expensive calls. The 150ms-target fix reduced
+total ms-of-audio needing catch-up (which helped on the faster Pentium
+OverDrive 83 test rig), but didn't address that cost-per-call, not
+call-count-to-reach-a-target, dominates on genuinely slow hardware.
+
+Added a hard cap on how many SDL_DOSAudioPump() calls this loop makes
+per frame (4), independent of whether the 150ms target was reached.
+This directly bounds worst-case per-frame pump cost regardless of CPU
+speed, at the cost of some ring-fill margin (more underrun risk on
+very slow hardware) -- an explicit tradeoff toward keeping the game
+itself playable first: a 2fps game is a worse failure than choppy
+audio, and choppy/dragging audio on real 486DX2-50 hardware (user-
+confirmed, live) was the visible symptom of this same underlying
+per-call cost problem, not a separate one.
+
+Note for whoever reads SDL_DOSAudioPump's own >32-consecutive-call
+"cap tripped" counter after this change: since that counter only
+resets on an actual false return from the function (ring full, cap
+tripped, or no device open) -- not merely on this call site's own loop
+exiting early at 4 -- the counter can still accumulate to 32 and trip
+*across* multiple frames (e.g. 8 frames of 4 successful calls each)
+even though no single frame ever calls it more than 4 times. Cap-trip
+*count* alone no longer indicates per-frame cost after this change;
+per-frame call count is now the more meaningful signal, and it's
+directly bounded to 4 by this patch regardless of what the cap-trip
+log shows.
+
+Verified under DOSBox-X: still converges to fully non-silent
+(silence-histo noisy_n reaching 100/100), same as before this change.
+Real-hardware re-verification (fps AND audio quality) on the 486DX2-50
+is the next step -- this is an experimental, conservative mitigation
+prioritizing frame rate, not a final answer to the underlying cost
+driver.
+---
+ gameSource/game.cpp | 28 +++++++++++++++++++++++++++-
+ 1 file changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index c55519c..9c9561b 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -1030,15 +1030,41 @@ char playGame() {
+         // under a full ring (doskutsu's own production ring is ~372 ms)
+         // -- is expected to be enough of a safety margin without
+         // pumping nearly as hard every frame.
++        //
++        // Real-hardware measurement on the port's actual minimum-target
++        // CPU (486DX2-50, PIT-timer fallback -- no RDTSC) showed the
++        // 150ms-target version above still catastrophic: 2.09 fps
++        // measured (vs. a 15fps KPI), while the renderer's own per-
++        // flush cost (~51ms average) only explains a ceiling around
++        // ~19fps. The gap is SDL_DOSAudioPump() itself: on hardware
++        // this slow, each individual call is expensive in real
++        // wall-clock terms (mixing/DMA-write work that scales with CPU
++        // speed, not with how much audio-time each call produces), so
++        // reaching even a *smaller* ms-of-audio target still means many
++        // expensive calls -- the 150ms-target fix (see above) reduced
++        // TOTAL ms needing catch-up, which helped on the faster Pentium
++        // OverDrive 83 test rig, but didn't address the fact that the
++        // COST PER CALL is what actually dominates on genuinely slow
++        // hardware. Capping the iteration COUNT directly, not just the
++        // ms target, bounds worst-case per-frame pump cost regardless
++        // of CPU speed. 4 is a conservative starting point, trading
++        // some audio ring-fill margin (more underrun risk on very slow
++        // hardware) for keeping the game itself playable -- a 2fps game
++        // is a worse failure than choppy audio. Real-hardware
++        // re-verification pending.
+         {
+             const int pumpTargetMs = 150;
++            const int pumpMaxIters = 4;
+             int pumpCapacityMs = SDL_DOSAudioRingCapacityMs();
+             int pumpClampedTargetMs = pumpTargetMs;
+             if( pumpCapacityMs > 0 && pumpClampedTargetMs > pumpCapacityMs ) {
+                 pumpClampedTargetMs = pumpCapacityMs;
+                 }
+-            while( SDL_DOSAudioRingFillMs() < pumpClampedTargetMs &&
++            int pumpIters = 0;
++            while( pumpIters < pumpMaxIters &&
++                   SDL_DOSAudioRingFillMs() < pumpClampedTargetMs &&
+                    SDL_DOSAudioPump() ) {
++                pumpIters ++;
+                 }
+             }
+ #endif
+-- 
+2.47.3
+
