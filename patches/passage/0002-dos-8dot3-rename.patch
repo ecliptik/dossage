@@ -1,4 +1,4 @@
-From ae20c25c6a6d9dfcc9db072f2837831b628da901 Mon Sep 17 00:00:00 2001
+From db659819140044f4a6dfa1932d094475d819bb80 Mon Sep 17 00:00:00 2001
 From: Micheal Waltz <micheal@ecliptik.com>
 Date: Wed, 26 Aug 2026 17:48:17 -0700
 Subject: [PATCH 2/2] dos: rename 8.3-unsafe filenames + sync
@@ -33,19 +33,19 @@ Also (unrelated concern, bundled here rather than as a third patch
 since it's a one-line rename): renamed g_pixtone_active_count ->
 g_dos_sfx_synth_active_count in game.cpp, following the shared
 SDL3-DOS backend's own generic-ification of that extern
-(sdl-dos-ports commit 9e9c5a8, this port's .sdl-dos-ports submodule
-pin bumped to match). See patch 0001's commit message for why this
+(sdl-dos-ports commit 9e9c5a8, fixed for real in 6647fc8 after a
+regression -- this port's .sdl-dos-ports submodule pin bumped to
+6647fc8 to match). See patch 0001's commit message for why this
 symbol needs to exist here at all.
 
 Verified: builds clean, boots to title screen and gameplay under
-DOSBox-X with lfn=false (real-MS-DOS-representative, not the
-temporary lfn=true workaround patch 0001 introduced).
+DOSBox-X with lfn=false (real-MS-DOS-representative).
 
 Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01FcoAbBcGQZAJ6j8PUBuGrg
 ---
- gameSource/World.cpp                          |  10 ++++-----
- gameSource/game.cpp                           |  19 +++++++++++++++---
+ gameSource/World.cpp                          |  10 +++---
+ gameSource/game.cpp                           |  29 ++++++++++--------
  .../graphics/{chestDust.tga => cdust.tga}     | Bin
  .../{characterSpriteSad.tga => charsad.tga}   | Bin
  .../{characterSprite.tga => charspr.tga}      | Bin
@@ -54,7 +54,7 @@ Claude-Session: https://claude.ai/code/session_01FcoAbBcGQZAJ6j8PUBuGrg
  .../settings/{fullscreen.ini => fullscrn.ini} |   0
  .../settings/{screenHeight.ini => height.ini} |   0
  .../settings/{screenWidth.ini => width.ini}   |   0
- 10 files changed, 21 insertions(+), 8 deletions(-)
+ 10 files changed, 22 insertions(+), 17 deletions(-)
  rename gameSource/graphics/{chestDust.tga => cdust.tga} (100%)
  rename gameSource/graphics/{characterSpriteSad.tga => charsad.tga} (100%)
  rename gameSource/graphics/{characterSprite.tga => charspr.tga} (100%)
@@ -87,25 +87,36 @@ index d8fc11e..4303719 100644
      }
  
 diff --git a/gameSource/game.cpp b/gameSource/game.cpp
-index 6aac800..c297865 100644
+index 6aac800..144534f 100644
 --- a/gameSource/game.cpp
 +++ b/gameSource/game.cpp
-@@ -109,6 +109,14 @@ double timeDelta = - ( (double)width / ( gameTime * lockedFrameRate ) );
- // system, so this stays permanently at 0 -- accurately reporting zero
- // active Pixtone channels, not a stub pretending to implement the
- // feature.
-+//
-+// TEMPORARY REVERT 2026-08-26: sdldos generic-ified this to
-+// g_dos_sfx_synth_active_count in sdl-dos-ports commit 9e9c5a8, but that
-+// commit's own shared/patches/sdl3-dos series fails to apply cleanly
-+// (patch 0009 conflicts across 3 files) against this port's pinned SDL
-+// SHA -- reported to sdldos, submodule pin rolled back to bf10f15 until
-+// fixed. Re-apply the g_dos_sfx_synth_active_count rename once the
-+// shared series is fixed and the pin is bumped forward again.
+@@ -101,16 +101,16 @@ double timeDelta = - ( (double)width / ( gameTime * lockedFrameRate ) );
+ 
+ // DOS-PORT: the shared SDL3-DOS Sound Blaster backend
+ // (SDL_dosaudio_sb.c) declares this as an "engine -> SDL extern" for its
+-// Pixtone-active-channel diagnostic histogram -- a doskutsu/Cave-Story-
+-// specific instrumentation feature baked into the shared patch series
+-// (see sdl-dos-ports' shared/patches/sdl3-dos/README.md's "Known naming
+-// debt" section) that every consumer must define at link time regardless
+-// of whether it uses Pixtone. Passage has no Pixtone-equivalent SFX
+-// system, so this stays permanently at 0 -- accurately reporting zero
+-// active Pixtone channels, not a stub pretending to implement the
+-// feature.
++// active-SFX-channel diagnostic histogram (generic across engines since
++// sdl-dos-ports commit 9e9c5a8 -- previously g_pixtone_active_count,
++// doskutsu/Cave-Story-specific naming debt; the shared patch series had
++// a regression that made this rename briefly unapplyable, fixed in
++// commit 6647fc8). Every consumer must define it at link time
++// regardless of whether it has an equivalent SFX-synth concept. Passage
++// doesn't, so this stays permanently at 0 -- accurately reporting zero
++// active channels, not a stub pretending to implement the feature.
  extern "C" {
- volatile uint32_t g_pixtone_active_count = 0;
+-volatile uint32_t g_pixtone_active_count = 0;
++volatile uint32_t g_dos_sfx_synth_active_count = 0;
  }
-@@ -376,11 +384,16 @@ int mainFunction( int inArgCount, char **inArgs ) {
+ 
+ 
+@@ -376,11 +376,16 @@ int mainFunction( int inArgCount, char **inArgs ) {
  
  
      // read screen size from settings
@@ -124,7 +135,7 @@ index 6aac800..c297865 100644
                                                      &heightFound );
      
      if( widthFound && heightFound ) {
-@@ -400,7 +413,7 @@ int mainFunction( int inArgCount, char **inArgs ) {
+@@ -400,7 +405,7 @@ int mainFunction( int inArgCount, char **inArgs ) {
  
  
      char fullscreenFound = false;
