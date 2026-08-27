@@ -83,3 +83,46 @@ stage: $(BUILD_DIR)/dossage.exe
 	cp -r $(PASSAGE_SRC)/graphics "$(STAGE_DIR)/graphics"
 	cp -r $(PASSAGE_SRC)/music    "$(STAGE_DIR)/music"
 	cp -r $(PASSAGE_SRC)/settings "$(STAGE_DIR)/settings"
+
+# --- Music render tool: host-native, not part of the DOS build -------------
+#
+# Re-renders gameSource/music/SONG.WAV from the unmodified synthesis logic
+# (musicPlayer.cpp's synthesizeAudioCallback, Timbre.cpp, Envelope.cpp) --
+# only needed if the song, timbres, or envelopes ever change. Not run by
+# `make all`/`make game`; builds its own host-native static SDL3 once into
+# $(BUILD_DIR)/host-sdl3 (separate from the DJGPP cross-build's sysroot).
+
+HOST_SDL3_DIR := $(BUILD_DIR)/host-sdl3
+RENDER_MUSIC_SRC := $(REPO_ROOT)/tools/render-music/render_music.cpp
+
+# DJGPP_BIN/DJGPP_TBIN are prepended onto PATH (and exported) above by
+# sdl3-dos.mk for the cross-build -- host-native cmake/gcc invocations
+# here must NOT see them (a DJGPP cross `as` doesn't understand a host
+# x86_64 `as --64` invocation and fails cryptically). HOST_PATH strips
+# them back out; HOST_CXX is the system compiler, not $(CXX) (which
+# sdl3-dos.mk points at the DJGPP cross g++).
+HOST_PATH := /usr/local/bin:/usr/bin:/bin
+HOST_CXX  := g++
+
+$(HOST_SDL3_DIR)/libSDL3.a:
+	mkdir -p $(HOST_SDL3_DIR)
+	PATH=$(HOST_PATH) cmake -S $(VENDOR_DIR)/SDL -B $(HOST_SDL3_DIR) \
+	    -DSDL_SHARED=OFF -DSDL_STATIC=ON -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF
+	PATH=$(HOST_PATH) $(MAKE) -C $(HOST_SDL3_DIR) -j$$(nproc) SDL3-static
+
+.PHONY: render-music
+render-music: $(HOST_SDL3_DIR)/libSDL3.a
+	PATH=$(HOST_PATH) $(HOST_CXX) -std=c++14 -O2 \
+	    -I$(VENDOR_DIR)/SDL/include -I$(VENDOR_DIR) -I$(PASSAGE_SRC) \
+	    $(RENDER_MUSIC_SRC) \
+	    $(PASSAGE_SRC)/musicPlayer.cpp \
+	    $(PASSAGE_SRC)/Timbre.cpp \
+	    $(PASSAGE_SRC)/Envelope.cpp \
+	    $(PASSAGE_SRC)/common.cpp \
+	    $(MINORGEMS_SRC)/io/file/linux/PathLinux.cpp \
+	    $(MINORGEMS_SRC)/system/unix/TimeUnix.cpp \
+	    $(MINORGEMS_SRC)/system/linux/ThreadLinux.cpp \
+	    $(MINORGEMS_SRC)/util/stringUtils.cpp \
+	    -L$(HOST_SDL3_DIR) -lSDL3 -lpthread -lm \
+	    -o $(BUILD_DIR)/render_music
+	cd $(PASSAGE_SRC) && $(BUILD_DIR)/render_music music/SONG.WAV
