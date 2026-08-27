@@ -1,4 +1,4 @@
-From b940ab1f46f478395cdacb949b55f220f737a005 Mon Sep 17 00:00:00 2001
+From ac8f7909ae95371e222d48b1a9ee0ce41a7eff39 Mon Sep 17 00:00:00 2001
 From: Micheal Waltz <micheal@ecliptik.com>
 Date: Wed, 26 Aug 2026 16:48:05 -0700
 Subject: [PATCH] dos: migrate SDL 1.2 -> SDL3 API surface
@@ -57,9 +57,9 @@ milestones reached on the first successful compile.
 ---
  .gitignore                 |   1 +
  gameSource/blowUp.h        |   3 +-
- gameSource/game.cpp        | 252 +++++++++++++++++++------------------
+ gameSource/game.cpp        | 258 ++++++++++++++++++++-----------------
  gameSource/musicPlayer.cpp |  90 +++++++------
- 4 files changed, 189 insertions(+), 157 deletions(-)
+ 4 files changed, 195 insertions(+), 157 deletions(-)
  create mode 100644 .gitignore
 
 diff --git a/.gitignore b/.gitignore
@@ -82,7 +82,7 @@ index ff52bd4..530a6e4 100644
  
  /**
 diff --git a/gameSource/game.cpp b/gameSource/game.cpp
-index b361feb..d1d4082 100644
+index b361feb..6aac800 100644
 --- a/gameSource/game.cpp
 +++ b/gameSource/game.cpp
 @@ -18,10 +18,8 @@
@@ -354,7 +354,7 @@ index b361feb..d1d4082 100644
                  displayH,
                  SDL_GetError() );
          }
-@@ -342,24 +338,35 @@ int mainFunction( int inArgCount, char **inArgs ) {
+@@ -342,24 +338,41 @@ int mainFunction( int inArgCount, char **inArgs ) {
      signal( SIGINT, catch_int );
  
  
@@ -372,8 +372,14 @@ index b361feb..d1d4082 100644
 +
 +    // DOS-PORT: SDL3 removed SDL_INIT_NOPARACHUTE (no signal-handler
 +    // "parachute" concept in SDL3 at all).
++    // DOS-PORT: also added SDL_INIT_AUDIO, absent from the original
++    // flags -- SDL1.2's SDL_OpenAudio() silently self-initialized the
++    // audio subsystem if needed, but SDL3's SDL_OpenAudioDeviceStream()
++    // does not; without this, startMusic() fails with "Audio subsystem
++    // is not initialized" (confirmed via a temporary diagnostic log
++    // during audio verification, 2026-08-26).
 +    Uint32 initFlags =
-+        SDL_INIT_VIDEO | SDL_INIT_JOYSTICK;
++        SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK;
 +
      #ifdef __mac__
          // SDL_Init is dreadfully slow if we try to init JOYSTICK on MacOSX
@@ -384,7 +390,7 @@ index b361feb..d1d4082 100644
 -        initFlags = 
 -	    SDL_INIT_VIDEO | SDL_INIT_NOPARACHUTE;
 +        initFlags =
-+	    SDL_INIT_VIDEO;
++	    SDL_INIT_VIDEO | SDL_INIT_AUDIO;
      #endif
 -    
 -    if( SDL_Init( initFlags ) < 0 ) {
@@ -400,7 +406,7 @@ index b361feb..d1d4082 100644
  
  
      // read screen size from settings
-@@ -408,27 +415,34 @@ int mainFunction( int inArgCount, char **inArgs ) {
+@@ -408,27 +421,34 @@ int mainFunction( int inArgCount, char **inArgs ) {
      
  
      // try to open joystick
@@ -445,7 +451,7 @@ index b361feb..d1d4082 100644
  
  
      
-@@ -479,9 +493,9 @@ int mainFunction( int inArgCount, char **inArgs ) {
+@@ -479,9 +499,9 @@ int mainFunction( int inArgCount, char **inArgs ) {
      
  
      if( joystick != NULL ) {
@@ -457,7 +463,7 @@ index b361feb..d1d4082 100644
      SDL_Quit();
  
      return 0;
-@@ -705,7 +719,7 @@ char playGame() {
+@@ -705,7 +725,7 @@ char playGame() {
  
      while( !done ) {
          
@@ -466,7 +472,7 @@ index b361feb..d1d4082 100644
              stepDX = false;
              }
          else {
-@@ -955,18 +969,18 @@ char playGame() {
+@@ -955,18 +975,18 @@ char playGame() {
              movingThisFrame = ( frameCount % 2 == 0 );
              }
          
@@ -489,7 +495,7 @@ index b361feb..d1d4082 100644
              // adjust blowup factor
              blowUpFactor += blowUpStep;
              
-@@ -991,7 +1005,7 @@ char playGame() {
+@@ -991,7 +1011,7 @@ char playGame() {
  
              }
  
@@ -498,7 +504,7 @@ index b361feb..d1d4082 100644
              // toggle fullscreen mode
              fullScreen = ! fullScreen;
              
-@@ -1001,7 +1015,7 @@ char playGame() {
+@@ -1001,7 +1021,7 @@ char playGame() {
          
              
  
@@ -507,7 +513,7 @@ index b361feb..d1d4082 100644
              char notBlocked = 
                  !isBlocked( (int)( playerX - moveDelta ), (int)playerY );
              
-@@ -1033,7 +1047,7 @@ char playGame() {
+@@ -1033,7 +1053,7 @@ char playGame() {
                      }
                  }
              }
@@ -516,7 +522,7 @@ index b361feb..d1d4082 100644
              char notBlocked = 
                  !isBlocked( (int)( playerX + moveDelta ), (int)playerY );
  
-@@ -1058,7 +1072,7 @@ char playGame() {
+@@ -1058,7 +1078,7 @@ char playGame() {
                      }  
                  }
              }
@@ -525,7 +531,7 @@ index b361feb..d1d4082 100644
              char notBlocked =
                  !isBlocked( (int)playerX, (int)( playerY - moveDelta ) );
              
-@@ -1090,7 +1104,7 @@ char playGame() {
+@@ -1090,7 +1110,7 @@ char playGame() {
                      }
                  }
              }
@@ -534,7 +540,7 @@ index b361feb..d1d4082 100644
              char notBlocked = 
                  !isBlocked( (int)playerX, (int)( playerY + moveDelta ) );
              
-@@ -1127,9 +1141,9 @@ char playGame() {
+@@ -1127,9 +1147,9 @@ char playGame() {
          SDL_Event event;
          while( SDL_PollEvent(&event) ) {
              switch( event.type ) {
@@ -547,7 +553,7 @@ index b361feb..d1d4082 100644
                          case SDLK_ESCAPE:
                              done = true;
                              quit = true;
-@@ -1138,7 +1152,7 @@ char playGame() {
+@@ -1138,7 +1158,7 @@ char playGame() {
                              break;
                          }
                      break;
