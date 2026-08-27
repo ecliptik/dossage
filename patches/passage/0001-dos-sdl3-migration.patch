@@ -1,7 +1,7 @@
-From ac8f7909ae95371e222d48b1a9ee0ce41a7eff39 Mon Sep 17 00:00:00 2001
+From ae1015202bb663bd36084c7fdff39c343cff5e10 Mon Sep 17 00:00:00 2001
 From: Micheal Waltz <micheal@ecliptik.com>
 Date: Wed, 26 Aug 2026 16:48:05 -0700
-Subject: [PATCH] dos: migrate SDL 1.2 -> SDL3 API surface
+Subject: [PATCH 1/2] dos: migrate SDL 1.2 -> SDL3 API surface
 
 Passage's entire SDL surface is small (raw video/input/audio, no
 mixer/image/font libs), so this is one patch covering the full
