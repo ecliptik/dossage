@@ -1,7 +1,8 @@
-From 11f32ad3e6cee54bbcf95b7cb5adc5200ea06743 Mon Sep 17 00:00:00 2001
+From 484f701813af703e3b5278fa35ab106c0544c169 Mon Sep 17 00:00:00 2001
 From: Micheal Waltz <micheal@ecliptik.com>
 Date: Thu, 27 Aug 2026 08:14:37 -0700
-Subject: [PATCH] dos: pump the audio ring explicitly once per frame
+Subject: [PATCH] dos: pump the audio ring explicitly once per frame, to a
+ target depth
 
 patch 0006 fixed Passage's cooperative-scheduler yield (SDL_Delay
 instead of Thread::staticSleep), which got PlayDevice running at all
@@ -13,25 +14,41 @@ regardless of average frame rate. doskutsu hit this and fixed it with
 an explicit engine-side pump (nxengine-evo/0162+), calling
 SDL_DOSAudioPump() -- a real shared-backend export already vendored in
 this port's own SDL (vendor/SDL/include/SDL3/SDL_dosaudio_pump.h,
-"DOSKUTSU local addition... never upstreamed") -- once per frame in a
-`while (SDL_DOSAudioPump()) { }` loop to top the ring up to full every
-frame, rather than hoping the cooperative scheduler gets to it.
+"DOSKUTSU local addition... never upstreamed") -- once per frame to
+top the ring up, rather than hoping the cooperative scheduler gets to
+it.
 
-Added the same call pattern to Passage's main loop, right after each
-frame's flip, guarded __DJGPP__ (DOS-only). Safe to call
-unconditionally per the export's own contract (no-op if no audio
-device is open).
+First revision of this patch pumped to FULL capacity every frame
+(`while (SDL_DOSAudioPump()) { }`) and confirmed audio audible on real
+hardware -- but real-hardware SDLDBG.LOG from a follow-up fps
+investigation showed 424 of 426 SDL_DOSAudioPump calls hitting its own
+>32-iteration safety cap (a near-maximal catch-up burst almost every
+single frame), a real and likely significant per-frame cost, and a much
+more aggressive usage pattern than doskutsu's own reference (which
+only calls this at rare stage-load seams, not every frame).
 
-Verified under DOSBox-X with SDL_HINT_DOS_SILENCE_HISTO=1: PlayDevice
-activity climbs to fully non-silent (noisy_n=100/100 in the final
-100-call window observed) versus the prior fix's mixed silent/noisy
-ratio -- a stronger, more consistent result than SDL_Delay alone.
+Revised to pump to a target DEPTH instead of full capacity, per
+SDL_DOSAudioRingFillMs's own doc comment ("the input to the engine
+depth-setpoint pump... pump SDL_DOSAudioPump() until this reaches a
+target depth, clamp the target below SDL_DOSAudioRingCapacityMs()").
+150ms is comfortably above one frame's audio (~67ms at Passage's
+15fps target) and well under a full ring (doskutsu's own production
+ring is ~372ms) -- enough safety margin without needing anywhere near
+as many iterations per frame in steady state. Passage has no long
+blocking I/O during gameplay (unlike doskutsu's stage-load reads, the
+scenario this mechanism was built for), so a shallower target should
+be sufficient.
+
+Verified under DOSBox-X with SDL_HINT_DOS_SILENCE_HISTO=1 (an earlier
+revision): PlayDevice activity fully non-silent. Real-hardware
+confirmation of BOTH the audio-audibility result and the reduced
+cap-trip rate is the next real-hardware round.
 ---
- gameSource/game.cpp | 23 ++++++++++++++++++++++-
- 1 file changed, 22 insertions(+), 1 deletion(-)
+ gameSource/game.cpp | 52 ++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 51 insertions(+), 1 deletion(-)
 
 diff --git a/gameSource/game.cpp b/gameSource/game.cpp
-index a077fc5..49a35d8 100644
+index a077fc5..c55519c 100644
 --- a/gameSource/game.cpp
 +++ b/gameSource/game.cpp
 @@ -29,6 +29,17 @@ int main( int inArgCount, char **inArgs ) {
@@ -52,7 +69,7 @@ index a077fc5..49a35d8 100644
  #include "blowUp.h"
  #include "World.h"
  #include "map.h"
-@@ -992,7 +1003,17 @@ char playGame() {
+@@ -992,7 +1003,46 @@ char playGame() {
              
          
          flipGameImageOntoScreen( screen );
@@ -65,7 +82,36 @@ index a077fc5..49a35d8 100644
 +        // thread getting yielded to (see the SDL_dosaudio_pump.h include
 +        // above). Safe to call unconditionally -- a no-op if no audio
 +        // device is open.
-+        while( SDL_DOSAudioPump() ) { }
++        //
++        // Pump to a target DEPTH, not to full capacity, per
++        // SDL_DOSAudioRingFillMs's own doc comment ("the input to the
++        // engine depth-setpoint pump... pump SDL_DOSAudioPump() until
++        // this reaches a target depth, clamp the target below
++        // SDL_DOSAudioRingCapacityMs()"). Real-hardware measurement
++        // (SDLDBG.LOG, 424/426 SDL_DOSAudioPump calls hitting its
++        // own >32-iteration safety cap) showed the naive
++        // pump-to-full-every-frame version (a prior revision of this
++        // patch) doing a near-maximal catch-up burst almost every
++        // single frame -- real, non-trivial per-frame cost, and the
++        // likely cause of a measured-slower-than-15fps regression.
++        // Passage has no long blocking I/O mid-gameplay (unlike
++        // doskutsu's stage-load reads, what this mechanism was
++        // originally built for), so a much shallower target -- comfortably
++        // above one frame's worth of audio (~67 ms at 15 fps), well
++        // under a full ring (doskutsu's own production ring is ~372 ms)
++        // -- is expected to be enough of a safety margin without
++        // pumping nearly as hard every frame.
++        {
++            const int pumpTargetMs = 150;
++            int pumpCapacityMs = SDL_DOSAudioRingCapacityMs();
++            int pumpClampedTargetMs = pumpTargetMs;
++            if( pumpCapacityMs > 0 && pumpClampedTargetMs > pumpCapacityMs ) {
++                pumpClampedTargetMs = pumpCapacityMs;
++                }
++            while( SDL_DOSAudioRingFillMs() < pumpClampedTargetMs &&
++                   SDL_DOSAudioPump() ) {
++                }
++            }
 +#endif
 +
  
