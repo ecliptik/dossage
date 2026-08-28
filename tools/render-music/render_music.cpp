@@ -149,18 +149,47 @@ int main( int inNumArgs, char **inArgs ) {
 
     SDL_DestroyAudioStream( stream );
 
+    // DOS-PORT: downmix to mono here, AFTER the full-fidelity stereo
+    // synthesis above -- synthesizeAudioCallback/Timbre/Envelope stay
+    // completely untouched (this only changes the shipped asset's
+    // format, not the musical content generation). Real-hardware
+    // measurement found the audio-pump loop a real, if secondary,
+    // per-frame cost (~20-25ms); mono halves the bytes/chunk the pump
+    // loop has to push for the same real-time duration. This is a real
+    // fidelity tradeoff, not a free win -- Passage's music genuinely has
+    // independent per-note left/right loudness (mLoudnessLeft/Right,
+    // decoded from music.tga's green/red channels), authored content,
+    // not incidental panning. Averaging L+R can't overflow Sint16 range:
+    // both inputs are already in [-32768, 32767], and (a+b)/2 of two
+    // same-range values stays in that range.
+    std::vector<Uint8> monoOutput;
+    monoOutput.reserve( output.size() / 2 );
+
+    const Sint16 *stereoSamples = (const Sint16 *)output.data();
+    int numStereoFrames = (int)( output.size() / 4 );
+
+    for( int i=0; i<numStereoFrames; i++ ) {
+        int left = stereoSamples[ i * 2 ];
+        int right = stereoSamples[ i * 2 + 1 ];
+        Sint16 monoSample = (Sint16)( ( left + right ) / 2 );
+
+        monoOutput.insert( monoOutput.end(),
+                           (Uint8 *)&monoSample, (Uint8 *)&monoSample + 2 );
+        }
+
     FILE *outFile = fopen( outPath, "wb" );
     if( outFile == NULL ) {
         fprintf( stderr, "couldn't open %s for writing\n", outPath );
         return 1;
         }
 
-    writeWavHeader( outFile, (Uint32)output.size(), sampleRate, 2, 16 );
-    fwrite( output.data(), 1, output.size(), outFile );
+    writeWavHeader( outFile, (Uint32)monoOutput.size(), sampleRate, 1, 16 );
+    fwrite( monoOutput.data(), 1, monoOutput.size(), outFile );
     fclose( outFile );
 
-    printf( "Wrote %s (%zu bytes PCM + 44 byte header)\n",
-            outPath, output.size() );
+    printf( "Wrote %s (%zu bytes PCM + 44 byte header, mono, "
+            "downmixed from %zu bytes stereo)\n",
+            outPath, monoOutput.size(), output.size() );
 
     return 0;
     }
