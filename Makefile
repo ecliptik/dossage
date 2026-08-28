@@ -46,7 +46,7 @@ GAME_OBJECTS := $(patsubst %.cpp,%.o,$(GAME_SOURCES))
 GAME_CXXFLAGS := \
     -I$(VENDOR_DIR) \
     -I$(SYSROOT)/include \
-    -march=i486 -mtune=pentium -O2 -fno-rtti \
+    -march=i486 -mtune=pentium -O2 -fno-rtti -fomit-frame-pointer \
     $(NOSIMD_FLAGS)
 
 %.o: %.cpp
