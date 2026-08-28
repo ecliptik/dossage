@@ -149,19 +149,32 @@ int main( int inNumArgs, char **inArgs ) {
 
     SDL_DestroyAudioStream( stream );
 
-    // DOS-PORT: downmix to mono here, AFTER the full-fidelity stereo
-    // synthesis above -- synthesizeAudioCallback/Timbre/Envelope stay
-    // completely untouched (this only changes the shipped asset's
-    // format, not the musical content generation). Real-hardware
-    // measurement found the audio-pump loop a real, if secondary,
-    // per-frame cost (~20-25ms); mono halves the bytes/chunk the pump
-    // loop has to push for the same real-time duration. This is a real
+    // DOS-PORT: build-time audio tier -- see musicPlayer.cpp's own
+    // comment on DOSSAGE_SAMPLE_RATE/DOSSAGE_AUDIO_CHANNELS for the
+    // full tradeoff. The stream/synthesis above always runs at full
+    // stereo fidelity (synthesizeAudioCallback/Timbre/Envelope stay
+    // completely untouched either way -- this only changes the shipped
+    // asset's format, not the musical content generation); only the
+    // final WAV write differs by tier.
+#ifndef DOSSAGE_AUDIO_CHANNELS
+#define DOSSAGE_AUDIO_CHANNELS 2
+#endif
+
+    FILE *outFile = fopen( outPath, "wb" );
+    if( outFile == NULL ) {
+        fprintf( stderr, "couldn't open %s for writing\n", outPath );
+        return 1;
+        }
+
+#if DOSSAGE_AUDIO_CHANNELS == 1
+    // Low tier: downmix to mono (average L+R, clamp-free by
+    // construction -- both inputs are already in [-32768, 32767], and
+    // (a+b)/2 of two same-range values stays in that range). A real
     // fidelity tradeoff, not a free win -- Passage's music genuinely has
     // independent per-note left/right loudness (mLoudnessLeft/Right,
     // decoded from music.tga's green/red channels), authored content,
-    // not incidental panning. Averaging L+R can't overflow Sint16 range:
-    // both inputs are already in [-32768, 32767], and (a+b)/2 of two
-    // same-range values stays in that range.
+    // not incidental panning; the pump-loop cost cut is the reason this
+    // tier exists at all.
     std::vector<Uint8> monoOutput;
     monoOutput.reserve( output.size() / 2 );
 
@@ -177,12 +190,6 @@ int main( int inNumArgs, char **inArgs ) {
                            (Uint8 *)&monoSample, (Uint8 *)&monoSample + 2 );
         }
 
-    FILE *outFile = fopen( outPath, "wb" );
-    if( outFile == NULL ) {
-        fprintf( stderr, "couldn't open %s for writing\n", outPath );
-        return 1;
-        }
-
     writeWavHeader( outFile, (Uint32)monoOutput.size(), sampleRate, 1, 16 );
     fwrite( monoOutput.data(), 1, monoOutput.size(), outFile );
     fclose( outFile );
@@ -190,6 +197,16 @@ int main( int inNumArgs, char **inArgs ) {
     printf( "Wrote %s (%zu bytes PCM + 44 byte header, mono, "
             "downmixed from %zu bytes stereo)\n",
             outPath, monoOutput.size(), output.size() );
+#else
+    // High tier: write the full-fidelity stereo output directly, no
+    // downmix.
+    writeWavHeader( outFile, (Uint32)output.size(), sampleRate, 2, 16 );
+    fwrite( output.data(), 1, output.size(), outFile );
+    fclose( outFile );
+
+    printf( "Wrote %s (%zu bytes PCM + 44 byte header, stereo)\n",
+            outPath, output.size() );
+#endif
 
     return 0;
     }
