@@ -1,0 +1,190 @@
+From 0bfc4c737c71658684a003618b0eff8bb37bdccb Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 13:50:57 -0700
+Subject: [PATCH] dos: skip the sprite-presence scan on cache misses; add
+ render-loop timing
+
+Follow-up to the 486DX2-50 fps investigation: vcctrl's cross-build
+comparison confirmed the video flush (~50ms/flush) and the audio pump
+(bounded, already fixed twice) are NOT the dominant per-frame cost --
+that cost held flat at ~50ms/flush across three builds with wildly
+different audio behavior, while measured fps barely moved (2.09 ->
+2.92 -> 3.15). Something else in the frame loop, untouched by any of
+those fixes, is eating most of the ~318ms average frame time.
+
+Two changes, both scoped to World.cpp's sampleFromWorldNoWeightHash /
+isSpritePresent:
+
+1. **Real, safe fix**: isSpritePresent() (an O(numAnimations) linear
+   scan) was called unconditionally for every pixel sample -- up to
+   two per on-screen pixel per frame -- even when the hash-table cache
+   lookup already came back empty (found=false), where its result is
+   provably irrelevant (setting an already-false flag to false again
+   is a no-op). Changed to `if( found && isSpritePresent(...) )`,
+   skipping the scan whenever there's nothing cached to invalidate --
+   behavior-identical, pure win on cache misses (Passage scrolls
+   continuously, so there's a steady stream of these every frame, not
+   just at startup).
+
+2. **Temporary diagnostic** (game.cpp, __DJGPP__-guarded, to be
+   reverted once measured): brackets the whole per-pixel render loop
+   (game.cpp's double for(y)/for(x) loop, NOT including the flush)
+   with Time::getCurrentTime(), logging average ms + the current
+   animation count to RENDERDBG.LOG every 20 frames. DOSBox-X smoke
+   test: ~13-30ms/loop average, animCount=2 (just character+spouse in
+   this run), game area only 100x12 pixels (much smaller than
+   initially assumed from screenshots) -- meaning the O(pixels*
+   animations) scan is likely a smaller factor than first hypothesized,
+   though DOSBox-X timing isn't authoritative for the real question
+   (real-hardware cost). Combined with the already-known real-hardware
+   flush cost (~50ms) and the exit-time fps number, this isolates
+   whatever's left unaccounted for once render-loop cost is known,
+   without needing to instrument every remaining per-frame subsystem
+   individually in this same round trip.
+
+Added a small accessor, getAnimationListSize() (World.h/.cpp), purely
+for this diagnostic's log line -- also temporary, revert alongside it.
+
+Verified under DOSBox-X: builds, boots, plays normally, RENDERDBG.LOG
+(note: DOS 8.3 truncates this to RENDERDB.LOG on the actual FAT
+filesystem -- confirmed, not a bug) populates as expected. No change
+to correctness or the safe optimization's behavior. Real-hardware
+measurement on the 486DX2-50 is the next step.
+---
+ gameSource/World.cpp | 25 ++++++++++++++++++++---
+ gameSource/World.h   |  6 ++++++
+ gameSource/game.cpp  | 48 ++++++++++++++++++++++++++++++++++++++++----
+ 3 files changed, 72 insertions(+), 7 deletions(-)
+
+diff --git a/gameSource/World.cpp b/gameSource/World.cpp
+index 4303719..2906540 100644
+--- a/gameSource/World.cpp
++++ b/gameSource/World.cpp
+@@ -199,6 +199,12 @@ class Animation {
+ SimpleVector<Animation> animationList;
+ 
+ 
++// DOS-PORT: temporary diagnostic accessor, see World.h.
++int getAnimationListSize() {
++    return animationList.size();
++    }
++
++
+ 
+ 
+ // pointers into vectors are unsafe
+@@ -356,12 +362,25 @@ rgbColor sampleFromWorldNoWeightHash( int inX, int inY ) {
+     char found;
+     
+     rgbColor sample = worldSampleHashTable.lookup( inX, inY, &found );
+-    
+-    if( isSpritePresent( inX, inY ) ) {
++
++    // DOS-PORT: only pay for the isSpritePresent scan (an O(numAnimations)
++    // linear scan, called here for every pixel sample -- up to two per
++    // on-screen pixel per frame, see game.cpp's render loop) when there's
++    // actually a cached value it could invalidate. If found is already
++    // false, setting it false again is a no-op -- behavior-identical,
++    // just skips the scan on every cache-miss pixel (the majority of
++    // pixels during initial cache population and, since Passage scrolls
++    // continuously, a steady stream of newly-revealed pixels every frame
++    // thereafter). Real-hardware measurement (486DX2-50) found the
++    // per-frame render loop -- not the video flush, not the audio pump,
++    // both already investigated and ruled out as the dominant cost --
++    // eating the vast majority of frame time; this scan is the leading
++    // suspect given its O(width*height*animations) shape.
++    if( found && isSpritePresent( inX, inY ) ) {
+         // don't consider cached result if a sprite is present
+         found = false;
+         }
+-            
++
+ 
+     if( found ) {
+         return sample;
+diff --git a/gameSource/World.h b/gameSource/World.h
+index 4562580..452865a 100644
+--- a/gameSource/World.h
++++ b/gameSource/World.h
+@@ -58,3 +58,9 @@ int getTileWidth();
+ 
+ int getTileHeight();
+ 
++
++// DOS-PORT: temporary diagnostic accessor (RENDERDBG.LOG in game.cpp) --
++// see isSpritePresent's own comment in World.cpp for why this count
++// matters. To be reverted alongside the rest of that diagnostic.
++int getAnimationListSize();
++
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 9c9561b..e0acf33 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -827,9 +827,24 @@ char playGame() {
+             }
+         
+ 
++#ifdef __DJGPP__
++        // TEMPORARY DIAGNOSTIC (RENDERDBG.LOG): direct measurement of the
++        // per-pixel render loop's own cost, isolated from both the video
++        // flush (already measured separately by the shared backend's own
++        // instrumentation, ~50ms/flush on the 486DX2-50, confirmed NOT
++        // the bottleneck by cross-build comparison) and the audio pump
++        // (already fixed/bounded, confirmed NOT the dominant cost either
++        // by the same comparison -- fps barely moved despite substantial
++        // audio-side changes). Leading suspect: sampleFromWorldNoWeightHash's
++        // isSpritePresent() scan (World.cpp), an O(numAnimations) linear
++        // scan called for every pixel sample (two per on-screen pixel per
++        // frame) -- O(width*height*animations) per frame. To be reverted
++        // once measured.
++        double renderLoopStartTime = Time::getCurrentTime();
++#endif
+         for( int y=0; y<height; y++ ) {
+             for( int x=0; x<width; x++ ) {
+-                
++
+                 //int worldX = (int)( pow( x / 2.0, 1.4 ) );
+                 
+                 // compression based on distance of pixel column from player
+@@ -936,10 +951,35 @@ char playGame() {
+                                 
+ 
+                 gameImage[ ( y + scoreHeight ) * width + x ] = combined;
+-                
++
+                 }
+-            }        
+-        
++            }
++#ifdef __DJGPP__
++        {
++            double renderLoopElapsed =
++                Time::getCurrentTime() - renderLoopStartTime;
++            static double renderLoopElapsedTotal = 0;
++            static int renderLoopFrameCount = 0;
++            renderLoopElapsedTotal += renderLoopElapsed;
++            renderLoopFrameCount ++;
++            if( renderLoopFrameCount >= 20 ) {
++                FILE *renderLog = fopen( "RENDERDBG.LOG", "a" );
++                if( renderLog != NULL ) {
++                    fprintf( renderLog,
++                             "[render-loop-cost n=%d] avg_ms=%f "
++                             "animCount=%d width=%d height=%d\n",
++                             renderLoopFrameCount,
++                             1000.0 * renderLoopElapsedTotal /
++                                 renderLoopFrameCount,
++                             getAnimationListSize(), width, height );
++                    fclose( renderLog );
++                    }
++                renderLoopElapsedTotal = 0;
++                renderLoopFrameCount = 0;
++                }
++            }
++#endif
++
+         drawScore( gameImage, width, height, score );
+         
+ 
+-- 
+2.47.3
+

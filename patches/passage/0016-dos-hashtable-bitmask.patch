@@ -1,0 +1,148 @@
+From 23680afff664157e11d43f65305c7fc0d7c59d3a Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 15:48:13 -0700
+Subject: [PATCH] dos: use a bitmask instead of modulo in HashTable's hash
+ function
+
+Real 486DX2-50 data (patch 0015's confirmation round) found the
+worldX-hoist fix a real but modest win (~28% render-loop reduction,
+vs. ~76% on DOSBox-X) -- the remaining ~52ms/frame is no longer
+dominated by transcendental math, pointing at the two sampleFromWorld()
+calls per pixel themselves (up to 2400/frame) as the next cost center.
+Read `HashTable.h` (used by both `World.cpp`'s `worldSampleHashTable`
+and `map.cpp`'s `blockedHashTable`, i.e. every one of those calls) to
+find the next fix rather than guessing further.
+
+Root cause: `computeHash()` used `% mSize` (mSize=30000 for the world
+table, 3000 for the blocked table -- neither a power of two) on every
+lookup and insert. Integer division/modulo is one of the most expensive
+integer operations on a 486 (tens of cycles per IDIV, no compiler
+shortcut available for a non-power-of-two runtime divisor) -- and this
+runs up to 2400 times/frame for the world table alone (2 samples/pixel
+x 1200 pixels), before even counting the blocked-table lookups inside
+`isBlocked()`.
+
+Fix: round the requested table size up to the next power of two in the
+constructor (`hashTableComputeCapacity()`, a simple shift-based
+round-up -- 30000 -> 32768, 3000 -> 4096), then replace the modulo in
+`computeHash()` with `& (mSize - 1)`, a single cheap instruction.
+Bonus: this also removes the old `if (hashKey < 0) hashKey += mSize`
+correction -- unlike modulo, ANDing any int (negative or not) with a
+positive low-bits mask always yields a value in [0, mSize-1], since AND
+only ever examines those low bits regardless of the operand's sign
+(two's complement). Purely a capacity/internal-layout change: both
+current call sites already requested non-power-of-two sizes, so "at
+least N slots" was never an exact-size contract -- callers get modestly
+more capacity (fewer collisions, not fewer), memory cost is a one-time
++9%/+37% array-size increase for the two tables respectively.
+
+Verified under DOSBox-X with deliberately careful scrutiny (this is a
+core caching structure touching both world-sampling and maze-blocking
+correctness, broader in scope than any single previous patch in this
+series): played longer than a typical smoke test (~20s past title-
+dismiss, letting more terrain scroll into view) and checked two
+screenshots partway through and at exit -- terrain, compression zone,
+and sprite all rendered identically to every prior smoke test, no
+corruption. Exit-time hit-ratio stats (95.2% / 99.3%) are consistent
+with prior runs' pattern, confirming the hash table still caches
+effectively and isn't thrashing under the new hash function. Clean
+boot/play/ESCAPE-quit, no hang. Real-hardware confirmation on the
+486DX2-50 (fps number plus a repeat RENDERDB.LOG capture) is the next
+step.
+
+(Process note: HashTable.h is a header with no direct .cpp counterpart,
+and this repo's Makefile does not track header dependencies -- editing
+it alone did not trigger a rebuild of World.o/map.o until their .o
+files were removed manually. Worth remembering for any future header-
+only change in this tree.)
+---
+ gameSource/HashTable.h | 60 +++++++++++++++++++++++++++++++-----------
+ 1 file changed, 45 insertions(+), 15 deletions(-)
+
+diff --git a/gameSource/HashTable.h b/gameSource/HashTable.h
+index 8164473..6bbc5e4 100644
+--- a/gameSource/HashTable.h
++++ b/gameSource/HashTable.h
+@@ -37,19 +37,45 @@ class HashTable {
+ // same file as the declaration
+ 
+ 
+-template <class Type> 
++// DOS-PORT: round the requested table size up to a power of two so
++// computeHash() below can replace an integer modulo with a bitmask AND.
++// Real-hardware measurement (486DX2-50) traced the render loop's
++// remaining cost (after patch 0015 hoisted the per-pixel worldX
++// transcendental math) to the two sampleFromWorld() calls per pixel --
++// each doing a HashTable lookup, up to 2400/frame for
++// worldSampleHashTable alone. Integer division/modulo (the original
++// "% mSize", with mSize=30000/3000, neither a power of two) is one of
++// the most expensive integer operations on a 486 -- tens of cycles per
++// IDIV, with no compiler shortcut available for a non-power-of-two
++// runtime divisor. A power-of-two table size lets computeHash use a
++// single-cycle AND instead. Purely a capacity/internal-layout change:
++// callers still request "at least N slots" (both current call sites,
++// World.cpp's 30000 and map.cpp's 3000, are non-power-of-two already,
++// so this was never an exact-size contract) and get somewhat more
++// (fewer collisions, not fewer), never fewer than requested.
++static inline int hashTableComputeCapacity( int inMinSize ) {
++    int size = 1;
++    while( size < inMinSize ) {
++        size <<= 1;
++        }
++    return size;
++    }
++
++
++
++template <class Type>
+ HashTable<Type>::HashTable( int inSize )
+-        : mSize( inSize ),
+-          mTable( new Type[ inSize ] ),
+-          mSetFlags( new char[ inSize ] ),
+-          mKeysA( new int[ inSize ] ),
+-          mKeysB( new int[ inSize ] ),
++        : mSize( hashTableComputeCapacity( inSize ) ),
++          mTable( new Type[ mSize ] ),
++          mSetFlags( new char[ mSize ] ),
++          mKeysA( new int[ mSize ] ),
++          mKeysB( new int[ mSize ] ),
+           mHitCount( 0 ),
+           mMissCount( 0 ) {
+-    
++
+ 
+     clear();
+-        
++
+     }
+ 
+ 
+@@ -71,14 +97,18 @@ HashTable<Type>::~HashTable() {
+ 
+ 
+ 
+-template <class Type> 
++template <class Type>
+ inline int HashTable<Type>::computeHash( int inKeyA, int inKeyB ) {
+-    
+-    int hashKey = ( inKeyA * 734727 + inKeyB * 263474 ) % mSize;
+-    if( hashKey < 0 ) {
+-        hashKey += mSize;
+-        }
+-    return hashKey;
++
++    // DOS-PORT: mSize is now always a power of two (see
++    // hashTableComputeCapacity above), so AND-with-(mSize-1) replaces the
++    // original "% mSize" -- a single cheap instruction instead of an
++    // integer division, and (unlike modulo) it needs no separate
++    // negative-result correction: ANDing any int, negative or not, with a
++    // positive low-bits mask always yields a value in [0, mSize-1], since
++    // AND only ever looks at those low bits regardless of the operand's
++    // sign (two's complement).
++    return ( inKeyA * 734727 + inKeyB * 263474 ) & ( mSize - 1 );
+     }
+ 
+ 
+-- 
+2.47.3
+

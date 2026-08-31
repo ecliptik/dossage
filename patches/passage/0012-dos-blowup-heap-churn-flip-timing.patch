@@ -1,0 +1,236 @@
+From af8623f92be02c3d0ab2e856fd4f9c34ffbc0e4d Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 14:24:10 -0700
+Subject: [PATCH] dos: remove per-row heap churn in blowupOntoScreen; time the
+ present path
+
+Real 486DX2-50 data continues to rule out hypotheses one at a time:
+patch 0011's PUMPDBG.LOG measured the bounded audio-pump loop at only
+~15-53ms/frame (4-15ms/call, not the ~50ms/call the "explains the whole
+gap" hypothesis needed) -- combined with the already-known render-loop
+cost (~70ms) and flush cost (~50ms), that's ~150ms of the real ~330ms
+average frame time accounted for. Still a ~180ms/frame gap, and every
+per-frame cost center measured so far has come back cheaper than
+hypothesized.
+
+Looked at what's genuinely untimed by any of the three existing
+diagnostics: `flipGameImageOntoScreen()` (game.cpp), called once per
+frame right after the render loop, does two things neither RENDERDBG.LOG
+nor the SDL3-DOS backend's own flush-timing block cover --
+`blowupOntoScreen()` (scales the ~100x12-ish gameImage up onto
+renderSurface, up to 640x480) and `SDL_BlitSurface()` (a full
+renderSurface -> window-surface format-conversion blit, potentially
+across the whole 640x480 window, not the tiny game image) inside
+flipScreen(). SDL_UpdateWindowSurface (the actual hardware write) is
+the only piece of this path any prior instrumentation touched.
+
+Two changes:
+
+1. **Real, safe fix** (blowUp.cpp): `blowupOntoScreen()` was doing
+   `new Uint32[newWidth]` / `delete[]` once per row, every frame --
+   `totalImageHeight` (~17-22) heap alloc/free pairs per frame, for a
+   buffer whose size is stable across a run except for rare
+   user-directed blowup-factor changes. Replaced with a single
+   grow-only static scratch buffer, allocated once (or on the rare
+   resize), reused every call after that -- eliminates the heap churn
+   entirely, behavior-identical (same box-fill + memcpy logic).
+   DOS/DJGPP's allocator running under CWSDPMI is exactly the kind of
+   place per-frame heap churn could plausibly cost real, disproportionate
+   time -- worth measuring given the pattern this whole investigation
+   has shown (each "obviously cheap" per-frame operation turning out
+   not to be), but a real win regardless of what FLIPDBG.LOG shows.
+
+2. **Temporary diagnostic** (game.cpp, `__DJGPP__`-guarded, to be
+   reverted once measured): times `blowupOntoScreen()`,
+   `SDL_BlitSurface()`, and `SDL_UpdateWindowSurface()` separately,
+   logging to FLIPDBG.LOG every 20 frames as
+   `[blowup-cost n=20] blowup_avg_ms=...` and
+   `[flip-cost n=20] blit_avg_ms=... present_avg_ms=...`. The
+   present_avg_ms figure should roughly cross-validate against the
+   SDL3-DOS backend's own already-known ~50ms/flush figure (same
+   underlying call) -- a sanity check on the new instrumentation, not
+   just new data.
+
+Verified under DOSBox-X: builds, boots, plays normally, FLIPDBG.LOG
+populates with both diagnostic lines as expected. No behavior change
+from the diagnostic; the heap-churn fix is behavior-identical by
+construction (same pixel output, same box-fill/memcpy sequence, just a
+reused buffer instead of a fresh one per row). Real-hardware
+measurement on the 486DX2-50 is the next step.
+---
+ gameSource/blowUp.cpp | 34 +++++++++++++-------
+ gameSource/game.cpp   | 75 +++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 98 insertions(+), 11 deletions(-)
+
+diff --git a/gameSource/blowUp.cpp b/gameSource/blowUp.cpp
+index ef91a18..dd8365c 100644
+--- a/gameSource/blowUp.cpp
++++ b/gameSource/blowUp.cpp
+@@ -6,32 +6,46 @@
+ 
+ void blowupOntoScreen( Uint32 *inImage, int inWidth, int inHeight,
+                        int inBlowFactor, SDL_Surface *inScreen ) {
+-    
++
+     int newWidth = inBlowFactor * inWidth;
+     int newHeight =  inBlowFactor * inHeight;
+-    
++
+     int yOffset = ( inScreen->h - newHeight ) / 2;
+     int xOffset = ( inScreen->w - newWidth ) / 2;
+-    
++
+     // pitch is in bytes
+     // convert to width in pixels
+     int scanlineWidth = inScreen->pitch / 4;
+-    
++
+     Uint32 *pixels = (Uint32 *)( inScreen->pixels );
+-    
++
+ 
+     // looping across the smaller image, instead of across the larger screen,
+     // was discovered using the profiler.
+ 
+ 
++    // DOS-PORT: reuse one scratch row buffer across calls instead of
++    // new[]/delete[]-ing it every row, every frame (inHeight heap alloc/
++    // free pairs per frame, previously). inWidth/inBlowFactor are stable
++    // across a run except for rare user-directed blowup-factor changes, so
++    // this only reallocates when the required size actually grows -- pure
++    // heap-churn removal, no behavior change.
++    static Uint32 *screenRowBuf = NULL;
++    static int screenRowBufCapacity = 0;
++    if( newWidth > screenRowBufCapacity ) {
++        delete [] screenRowBuf;
++        screenRowBuf = new Uint32[ newWidth ];
++        screenRowBufCapacity = newWidth;
++        }
++
+     // an entire screen row is repeated inBlowFactor times down the screen
+     // (as a row of pixel boxes)
+     // Thus, we can offload a lot more work onto memcpy if we assemble one
+     // of these rows and then memcpy it onto the screen inBlowFactor times
+     for( int y=0; y<inHeight; y++ ) {
+-        
+-        Uint32 *screenRow = new Uint32[ newWidth ];
+-        
++
++        Uint32 *screenRow = screenRowBuf;
++
+         // fill the screen row with rows from the pixel boxes
+         for( int x=0; x<inWidth; x++ ) {
+ 
+@@ -64,9 +78,7 @@ void blowupOntoScreen( Uint32 *inImage, int inWidth, int inHeight,
+ 	    memcpy( &( pixels[ screenRowIndex ] ),
+                     screenRow, newWidth * 4 );
+             }
+-        
+-        delete [] screenRow;
+-        
++
+         }
+             
+     }
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 3ca3255..53fd251 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -265,9 +265,53 @@ void flipScreen( SDL_Surface *inScreen ) {
+         SDL_UnlockSurface( renderSurface );
+         }
+ 
++#ifdef __DJGPP__
++    // TEMPORARY DIAGNOSTIC (FLIPDBG.LOG): neither the render-loop
++    // diagnostic (RENDERDBG.LOG, patch 0010, brackets only the
++    // sampleFromWorld double loop) nor the SDL3-DOS backend's own
++    // flush-timing block (times SDL_UpdateWindowSurface's own hardware
++    // write) cover this function's SDL_BlitSurface call -- a full
++    // renderSurface -> window-surface format-conversion blit, done in
++    // plain SDL3 software blit code, potentially over the FULL window
++    // resolution (640x480), not the tiny 100x12 game image. Time it
++    // directly rather than assuming it's cheap.
++    double blitStartTime = Time::getCurrentTime();
++#endif
++
+     SDL_BlitSurface( renderSurface, NULL, inScreen, NULL );
+ 
++#ifdef __DJGPP__
++    double blitElapsed = Time::getCurrentTime() - blitStartTime;
++    double presentStartTime = Time::getCurrentTime();
++#endif
++
+     SDL_UpdateWindowSurface( window );
++
++#ifdef __DJGPP__
++    {
++        double presentElapsed = Time::getCurrentTime() - presentStartTime;
++        static double blitElapsedTotal = 0;
++        static double presentElapsedTotal = 0;
++        static int flipFrameCount = 0;
++        blitElapsedTotal += blitElapsed;
++        presentElapsedTotal += presentElapsed;
++        flipFrameCount ++;
++        if( flipFrameCount >= 20 ) {
++            FILE *flipLog = fopen( "FLIPDBG.LOG", "a" );
++            if( flipLog != NULL ) {
++                fprintf( flipLog,
++                         "[flip-cost n=%d] blit_avg_ms=%f present_avg_ms=%f\n",
++                         flipFrameCount,
++                         1000.0 * blitElapsedTotal / flipFrameCount,
++                         1000.0 * presentElapsedTotal / flipFrameCount );
++                fclose( flipLog );
++                }
++            blitElapsedTotal = 0;
++            presentElapsedTotal = 0;
++            flipFrameCount = 0;
++            }
++        }
++#endif
+     }
+ 
+ 
+@@ -290,9 +334,40 @@ void flipGameImageOntoScreen( SDL_Surface *inScreen ) {
+     if( blowUpChanged ) {
+         SDL_FillSurfaceRect( renderSurface, NULL, 0x00000000 );
+         }
++
++#ifdef __DJGPP__
++    // TEMPORARY DIAGNOSTIC (FLIPDBG.LOG): also untimed by any existing
++    // diagnostic -- scales the 100x12(ish) gameImage up onto renderSurface
++    // (up to 640x480) every frame. See flipScreen()'s own comment for why
++    // this whole present path needs direct measurement.
++    double blowupStartTime = Time::getCurrentTime();
++#endif
++
+     blowupOntoScreen( gameImage,
+ 		      width, totalImageHeight, blowUpFactor, renderSurface );
+ 
++#ifdef __DJGPP__
++    {
++        double blowupElapsed = Time::getCurrentTime() - blowupStartTime;
++        static double blowupElapsedTotal = 0;
++        static int blowupFrameCount = 0;
++        blowupElapsedTotal += blowupElapsed;
++        blowupFrameCount ++;
++        if( blowupFrameCount >= 20 ) {
++            FILE *flipLog = fopen( "FLIPDBG.LOG", "a" );
++            if( flipLog != NULL ) {
++                fprintf( flipLog,
++                         "[blowup-cost n=%d] blowup_avg_ms=%f\n",
++                         blowupFrameCount,
++                         1000.0 * blowupElapsedTotal / blowupFrameCount );
++                fclose( flipLog );
++                }
++            blowupElapsedTotal = 0;
++            blowupFrameCount = 0;
++            }
++        }
++#endif
++
+     flipScreen( inScreen );
+ 
+     // we've handled any blow up change
+-- 
+2.47.3
+

@@ -1,0 +1,102 @@
+From 627c10779ba2fffdd3215f744901d8606ccc7c07 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 14:09:56 -0700
+Subject: [PATCH] dos: add per-frame audio-pump-loop timing diagnostic
+
+Real 486DX2-50 data from the render-loop diagnostic (patch 0010) came
+back: fps holds at ~3.04 (vs. 3.15 before that patch -- within noise,
+consistent with the small 100x12 viewport / 2-animation scene weakening
+the sprite-scan hypothesis as predicted). Real frame time is ~329ms
+(54s / 164 frames). Render loop itself measured ~63.5-77ms/loop
+steady-state (first sample 113ms, likely warm-up/cache effects,
+excluded). Combined with the SDL3-DOS backend's own flush-timing
+instrumentation (~50ms/flush, confirmed constant across builds by an
+earlier vcctrl cross-build comparison), that's only ~120-190ms of the
+~329ms frame time accounted for -- still a ~140-200ms/frame gap.
+
+Leading remaining candidate, not yet measured directly: the per-frame
+audio-ring pump loop itself (game.cpp, patch 0007/0008), bounded to at
+most 4 SDL_DOSAudioPump() calls/frame by patch 0008's iteration cap.
+That cap was sized to bound worst-case cost assuming per-call cost was
+modest -- but the original real-hardware finding that motivated the cap
+(SDLDBG.LOG showing SDL_DOSAudioPump repeatedly hitting its own
+>32-iteration safety counter) was never converted into a direct
+per-call wall-clock measurement on this specific CPU. 4 calls at
+roughly the same magnitude as a single video flush (~50ms) would
+account for almost exactly the remaining gap.
+
+Adds a temporary diagnostic (__DJGPP__-guarded, mirrors patch 0010's
+RENDERDBG.LOG pattern): times the whole bounded pump loop (not
+individual SDL_DOSAudioPump() calls -- the loop already exits early
+whenever the ring reaches target depth, so total loop time already
+reflects real per-frame cost) and logs avg ms + avg iteration count to
+PUMPDBG.LOG every 20 frames.
+
+Verified under DOSBox-X: builds, boots, plays normally, PUMPDBG.LOG
+populates. No behavior change -- purely additive logging alongside the
+existing pump loop. Real-hardware measurement on the 486DX2-50 is the
+next step, to confirm or rule out the audio pump loop as the dominant
+remaining per-frame cost.
+---
+ gameSource/game.cpp | 40 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 40 insertions(+)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index e0acf33..3ca3255 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -1101,11 +1101,51 @@ char playGame() {
+                 pumpClampedTargetMs = pumpCapacityMs;
+                 }
+             int pumpIters = 0;
++
++            // TEMPORARY DIAGNOSTIC (PUMPDBG.LOG): the render-loop cost
++            // diagnostic (RENDERDBG.LOG, patch 0010) plus the SDL3-DOS
++            // backend's own flush-timing instrumentation (~50ms/flush,
++            // constant across builds) only accounted for ~120ms of the
++            // ~325ms real 486DX2-50 average frame time -- this bounded
++            // pump loop (capped at 4 iterations by patch 0008) is the
++            // remaining candidate: if each SDL_DOSAudioPump() call costs
++            // real wall-clock time proportional to CPU speed rather than
++            // audio-time produced (as hypothesized in the comment above,
++            // never directly measured), 4 calls could plausibly explain
++            // the remaining ~200ms gap on its own. Time the whole loop
++            // directly rather than assuming.
++            double pumpLoopStartTime = Time::getCurrentTime();
++
+             while( pumpIters < pumpMaxIters &&
+                    SDL_DOSAudioRingFillMs() < pumpClampedTargetMs &&
+                    SDL_DOSAudioPump() ) {
+                 pumpIters ++;
+                 }
++
++            {
++                double pumpLoopElapsed = Time::getCurrentTime() - pumpLoopStartTime;
++                static double pumpLoopElapsedTotal = 0;
++                static int pumpLoopItersTotal = 0;
++                static int pumpLoopFrameCount = 0;
++                pumpLoopElapsedTotal += pumpLoopElapsed;
++                pumpLoopItersTotal += pumpIters;
++                pumpLoopFrameCount ++;
++                if( pumpLoopFrameCount >= 20 ) {
++                    FILE *pumpLog = fopen( "PUMPDBG.LOG", "a" );
++                    if( pumpLog != NULL ) {
++                        fprintf( pumpLog,
++                                 "[pump-loop-cost n=%d] avg_ms=%f "
++                                 "avg_iters=%f\n",
++                                 pumpLoopFrameCount,
++                                 1000.0 * pumpLoopElapsedTotal / pumpLoopFrameCount,
++                                 (double)pumpLoopItersTotal / pumpLoopFrameCount );
++                        fclose( pumpLog );
++                        }
++                    pumpLoopElapsedTotal = 0;
++                    pumpLoopItersTotal = 0;
++                    pumpLoopFrameCount = 0;
++                    }
++                }
+             }
+ #endif
+ 
+-- 
+2.47.3
+

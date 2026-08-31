@@ -1,0 +1,325 @@
+From 6f4a3631351b27078288065ccd118035ad31d661 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 17:53:02 -0700
+Subject: [PATCH] dos: replace double-precision pixel blending with fixed-point
+
+Peer review (session "dossage-24") flagged double-precision FP as a
+likely render-loop cost after patches 0015/0016 fixed the loop's other
+two known costs (worldX transcendental math, HashTable modulo) -- the
+486's FPU-to-integer conversion requires a full rounding-mode save/
+restore (fldcw/fistp/fldcw), not just the arithmetic itself, so a
+(unsigned char)(double) cast is disproportionately expensive there.
+
+Found the actual hot site by reading World.cpp directly rather than
+converting everything indiscriminately: sampleFromWorld() (game.cpp
+calls it twice per pixel, up to 2400 times/frame) does its weight
+multiply and truncate to unsigned char UNCONDITIONALLY on every call --
+including on a worldSampleHashTable cache HIT, which is the vast
+majority of calls (this port's own real-hardware hit ratios run
+94-99%). So the same cached rgbColor value was being re-truncated from
+double to unsigned char on every single reuse, redundantly, rather than
+once when it was first computed.
+
+Fix: rgbColorStruct's r/g/b fields are now `int` (already-rounded 0-255
+values), not `double`. The double blend math that PRODUCES a color
+(tile-set blending, animation-page blending in
+sampleFromWorldNoWeight()) is UNCHANGED -- it only runs on an actual
+cache miss (~1-6% of calls per the same real-hardware hit ratios), so
+it was never the target here -- it just now rounds to int once, at the
+point of computation, instead of leaving a double for every future
+reuse to re-truncate. sampleFromWorld()'s own weight parameter is now
+an int scaled by 256 (256 == a weight of 1.0) instead of a double,
+computed once per screen column in game.cpp's existing patch-0015
+precompute loop (100 times/frame, not 2400) -- bWeight256 truncates the
+same way the original double path did, aWeight256 = 256 - bWeight256
+(not an independent truncation of 1-bWeight) so the pair still always
+sums to exactly 256, matching the original aWeight = 1-bWeight identity
+exactly rather than letting two separate roundings drift apart.
+sampleFromWorld()'s per-call math is now `(inWeight256 * c.r) >> 8` --
+pure 32-bit integer multiply-and-shift (max product 256*255=65280, no
+overflow risk), not an FPU operation at all.
+
+rgbColor is entirely internal to World.cpp (confirmed via a repo-wide
+grep) -- no other file's contract changes, other than
+sampleFromWorld()'s own declared signature in World.h (double -> int
+weight parameter, updated at both real call sites in game.cpp plus the
+dead/commented-out mural-generation code for consistency).
+
+Verified under DOSBox-X with careful visual comparison (this touches
+color computation across the whole rendering pipeline -- world tiles,
+sprites, chests, gems -- not just an intermediate buffer): two
+screenshots several seconds apart during normal scrolling gameplay show
+identical terrain shading, path color, sprite colors, and status-bar
+icon colors to every prior smoke test in this series -- no banding, no
+channel shift, no truncation artifacts. Exit-time hit ratios
+(94.6%/99.2%) match the established pattern, confirming the cache
+itself still behaves correctly under the new int-based storage. Clean
+boot/play/ESCAPE-quit, no hang. Real-hardware confirmation on the
+486DX2-50 (fps number plus a repeat RENDERDB.LOG capture) is the next
+step.
+---
+ gameSource/World.cpp | 96 ++++++++++++++++++++++++++++----------------
+ gameSource/World.h   |  5 ++-
+ gameSource/game.cpp  | 46 ++++++++++++++-------
+ 3 files changed, 96 insertions(+), 51 deletions(-)
+
+diff --git a/gameSource/World.cpp b/gameSource/World.cpp
+index 2906540..a77dbea 100644
+--- a/gameSource/World.cpp
++++ b/gameSource/World.cpp
+@@ -287,10 +287,26 @@ char isSpriteTransparent( GraphicContainer *inContainer, int inSpriteIndex ) {
+ 
+ 
+ 
++// DOS-PORT: int channels (0-255), not double. sampleFromWorld() below
++// runs unconditionally on every sampleFromWorld() call -- 2x per pixel,
++// up to 2400/frame on this port's 100x12 image, REGARDLESS of whether
++// the underlying value came from a fresh cache-miss compute or a cache
++// hit (the vast majority of calls, since the world scrolls and most
++// samples are already cached) -- and every one of those calls used to
++// pay a (unsigned char)(double) truncation per channel: real,
++// disproportionate cost on a 486, whose FPU-to-integer conversion
++// requires a full rounding-mode save/restore (fldcw/fistp/fldcw), not
++// just the multiply itself. Storing already-rounded ints here means
++// that conversion happens once, at cache-population time (a genuine
++// cache MISS only, ~5-8% of calls per this port's own measured hit
++// ratios), instead of redundantly on every reuse of the same cached
++// value. The double blend math that PRODUCES these values (tile-set
++// blending, animation-page blending) is untouched -- it's rare enough
++// (same cache-miss-only frequency) that it was never the target here.
+ struct rgbColorStruct {
+-    double r;
+-    double g;
+-    double b;
++    int r;
++    int g;
++    int b;
+     };
+ typedef struct rgbColorStruct rgbColor;
+ 
+@@ -305,13 +321,18 @@ rgbColor sampleFromWorldNoWeightHash( int inX, int inY );
+ 
+ 
+ 
+-Uint32 sampleFromWorld( int inX, int inY, double inWeight ) {
++Uint32 sampleFromWorld( int inX, int inY, int inWeight256 ) {
+     rgbColor c = sampleFromWorldNoWeightHash( inX, inY );
+-    
+-    unsigned char r = (unsigned char)( inWeight * c.r );
+-    unsigned char g = (unsigned char)( inWeight * c.g );
+-    unsigned char b = (unsigned char)( inWeight * c.b );
+-    
++
++    // DOS-PORT: inWeight256 * c.r maxes at 256*255=65280, well inside
++    // 32-bit int range -- no overflow risk. This is pure integer
++    // multiply-and-shift, not an FPU operation at all, unlike the
++    // (unsigned char)(double) truncation this replaced (see
++    // rgbColorStruct's own comment above for why that mattered).
++    unsigned char r = (unsigned char)( ( inWeight256 * c.r ) >> 8 );
++    unsigned char g = (unsigned char)( ( inWeight256 * c.g ) >> 8 );
++    unsigned char b = (unsigned char)( ( inWeight256 * c.b ) >> 8 );
++
+ 
+     return r << 16 | g << 8 | b;
+     }
+@@ -453,24 +474,27 @@ rgbColor sampleFromWorldNoWeight( int inX, int inY, char *outTransient ) {
+                 // in non-transparent part
+             
+                 if( blendWeight != 0 ) {
+-                    returnColor.r = 
+-                        ( 1 - blendWeight ) * a.mGraphics->mRed[ animIndex ] 
++                    // DOS-PORT: this blend runs only on a cache miss
++                    // (see rgbColorStruct's own comment) -- double math
++                    // here is fine, just round to int once at the end.
++                    returnColor.r = (int)(
++                        ( 1 - blendWeight ) * a.mGraphics->mRed[ animIndex ]
+                         +
+-                        blendWeight * a.mGraphics->mRed[ animBlendIndex ];
+-                    returnColor.g = 
+-                        ( 1 - blendWeight ) * a.mGraphics->mGreen[ animIndex ] 
++                        blendWeight * a.mGraphics->mRed[ animBlendIndex ] );
++                    returnColor.g = (int)(
++                        ( 1 - blendWeight ) * a.mGraphics->mGreen[ animIndex ]
+                         +
+-                        blendWeight * a.mGraphics->mGreen[ animBlendIndex ];
+-                    returnColor.b = 
+-                        ( 1 - blendWeight ) * a.mGraphics->mBlue[ animIndex ] 
++                        blendWeight * a.mGraphics->mGreen[ animBlendIndex ] );
++                    returnColor.b = (int)(
++                        ( 1 - blendWeight ) * a.mGraphics->mBlue[ animIndex ]
+                         +
+-                        blendWeight * a.mGraphics->mBlue[ animBlendIndex ];
++                        blendWeight * a.mGraphics->mBlue[ animBlendIndex ] );
+                     }
+                 else {
+                     // no blend
+-                    returnColor.r = a.mGraphics->mRed[ animIndex ];
+-                    returnColor.g = a.mGraphics->mGreen[ animIndex ];
+-                    returnColor.b = a.mGraphics->mBlue[ animIndex ];
++                    returnColor.r = (int)a.mGraphics->mRed[ animIndex ];
++                    returnColor.g = (int)a.mGraphics->mGreen[ animIndex ];
++                    returnColor.b = (int)a.mGraphics->mBlue[ animIndex ];
+                     }
+                 
+                 *outTransient = true;
+@@ -590,17 +614,19 @@ rgbColor sampleFromWorldNoWeight( int inX, int inY, char *outTransient ) {
+     int imageIndex =  tileImageOffset + imageY * tileImageW + imageX;
+     int blendImageIndex =  blendTileImageOffset + imageY * tileImageW + imageX;
+     
+-    returnColor.r = 
++    // DOS-PORT: cache-miss-only (see rgbColorStruct's own comment) --
++    // double blend math is fine here, just round to int once at the end.
++    returnColor.r = (int)(
+         (1-blendWeight) * tileContainer->mRed[ imageIndex ] +
+-        blendWeight * tileContainer->mRed[ blendImageIndex ];
+-    
+-    returnColor.g =  
++        blendWeight * tileContainer->mRed[ blendImageIndex ] );
++
++    returnColor.g = (int)(
+         (1-blendWeight) * tileContainer->mGreen[ imageIndex ] +
+-        blendWeight * tileContainer->mGreen[ blendImageIndex ];
+-    
+-    returnColor.b =  
++        blendWeight * tileContainer->mGreen[ blendImageIndex ] );
++
++    returnColor.b = (int)(
+         (1-blendWeight) * tileContainer->mBlue[ imageIndex ] +
+-        blendWeight * tileContainer->mBlue[ blendImageIndex ];
++        blendWeight * tileContainer->mBlue[ blendImageIndex ] );
+     
+     
+     // only consider drawing chests in empty spots
+@@ -665,9 +691,9 @@ rgbColor sampleFromWorldNoWeight( int inX, int inY, char *outTransient ) {
+                     
+                     gemColorUsed = true;
+                     
+-                    returnColor.r = gemColors[ gemNumber ][ 0 ];
+-                    returnColor.g = gemColors[ gemNumber ][ 1 ];
+-                    returnColor.b = gemColors[ gemNumber ][ 2 ];
++                    returnColor.r = (int)gemColors[ gemNumber ][ 0 ];
++                    returnColor.g = (int)gemColors[ gemNumber ][ 1 ];
++                    returnColor.b = (int)gemColors[ gemNumber ][ 2 ];
+ 
+                     }
+                 
+@@ -676,9 +702,9 @@ rgbColor sampleFromWorldNoWeight( int inX, int inY, char *outTransient ) {
+ 
+             if( !gemColorUsed ) {
+                 // use underlying chest color
+-                returnColor.r = chestContainer->mRed[ imageIndex ];
+-                returnColor.g = chestContainer->mGreen[ imageIndex ];
+-                returnColor.b = chestContainer->mBlue[ imageIndex ];
++                returnColor.r = (int)chestContainer->mRed[ imageIndex ];
++                returnColor.g = (int)chestContainer->mGreen[ imageIndex ];
++                returnColor.b = (int)chestContainer->mBlue[ imageIndex ];
+                 }
+             
+             }
+diff --git a/gameSource/World.h b/gameSource/World.h
+index 452865a..efc8913 100644
+--- a/gameSource/World.h
++++ b/gameSource/World.h
+@@ -13,7 +13,10 @@ void initWorld();
+ void destroyWorld();
+         
+ 
+-Uint32 sampleFromWorld( int inX, int inY, double inWeight = 1.0 );
++// DOS-PORT: inWeight256 is a fixed-point blend weight scaled by 256
++// (256 == a weight of 1.0) rather than a double -- see World.cpp's own
++// comment on sampleFromWorld() for why.
++Uint32 sampleFromWorld( int inX, int inY, int inWeight256 = 256 );
+ 
+ 
+ void startPrizeAnimation( int inX, int inY );
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 61d6154..a32c478 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -1063,8 +1063,8 @@ char playGame() {
+         for( int y=0; y<muralHeight; y++ ) {
+             int worldX = x + s * stripWidth;
+             
+-            Uint32 sample = 
+-                sampleFromWorld( worldX, y + yOffset, 1 );
++            Uint32 sample =
++                sampleFromWorld( worldX, y + yOffset, 256 );
+             
+             int muralY = s * (muralHeight + betweenStripSkip) + y;
+             
+@@ -1162,17 +1162,24 @@ char playGame() {
+         // pass before the y loop -- same math, same results (maxWorldX/
+         // minWorldX tracking moves here too, harmless since it only reads
+         // x-dependent values that don't change across y).
++        // DOS-PORT: aWeight/bWeight caches store a fixed-point weight
++        // (scaled by 256, i.e. 256 == a weight of 1.0) rather than a
++        // double -- see World.cpp's sampleFromWorld() and
++        // rgbColorStruct's own comments for why: converting once here
++        // (100 times/frame) instead of leaving sampleFromWorld() to
++        // convert on every one of its own 2400 calls/frame is the whole
++        // point of this patch.
+         static int *intWorldXCache = NULL;
+-        static double *aWeightCache = NULL;
+-        static double *bWeightCache = NULL;
++        static int *aWeight256Cache = NULL;
++        static int *bWeight256Cache = NULL;
+         static int worldXCacheCapacity = 0;
+         if( width > worldXCacheCapacity ) {
+             delete [] intWorldXCache;
+-            delete [] aWeightCache;
+-            delete [] bWeightCache;
++            delete [] aWeight256Cache;
++            delete [] bWeight256Cache;
+             intWorldXCache = new int[ width ];
+-            aWeightCache = new double[ width ];
+-            bWeightCache = new double[ width ];
++            aWeight256Cache = new int[ width ];
++            bWeight256Cache = new int[ width ];
+             worldXCacheCapacity = width;
+             }
+ 
+@@ -1242,11 +1249,20 @@ char playGame() {
+             int intWorldX = (int)floor( worldX );
+ 
+             double bWeight = worldX - intWorldX;
+-            double aWeight = 1 - bWeight;
++
++            // fixed-point, scaled by 256 -- bWeight256 truncates (matching
++            // the original double path's own truncating cast in
++            // sampleFromWorld), aWeight256 = 256 - bWeight256 (not a
++            // separate truncation of (1-bWeight)) so the two always sum
++            // to exactly 256, mirroring the original aWeight = 1-bWeight
++            // relationship exactly rather than letting two independent
++            // roundings drift apart.
++            int bWeight256 = (int)( bWeight * 256 );
++            int aWeight256 = 256 - bWeight256;
+ 
+             intWorldXCache[x] = intWorldX;
+-            aWeightCache[x] = aWeight;
+-            bWeightCache[x] = bWeight;
++            aWeight256Cache[x] = aWeight256;
++            bWeight256Cache[x] = bWeight256;
+             }
+ 
+         for( int y=0; y<height; y++ ) {
+@@ -1255,13 +1271,13 @@ char playGame() {
+                 int worldY = (int)floor( y + dY );
+ 
+                 int intWorldX = intWorldXCache[x];
+-                double aWeight = aWeightCache[x];
+-                double bWeight = bWeightCache[x];
++                int aWeight256 = aWeight256Cache[x];
++                int bWeight256 = bWeight256Cache[x];
+ 
+                 Uint32 sampleA =
+-                    sampleFromWorld( intWorldX, worldY, aWeight );
++                    sampleFromWorld( intWorldX, worldY, aWeight256 );
+                 Uint32 sampleB =
+-                    sampleFromWorld( intWorldX + 1, worldY, bWeight );
++                    sampleFromWorld( intWorldX + 1, worldY, bWeight256 );
+ 
+ 
+ 
+-- 
+2.47.3
+

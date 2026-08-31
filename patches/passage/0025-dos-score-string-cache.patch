@@ -1,0 +1,173 @@
+From f56c3f5526aef5bc7a04e503da989186a13bfe3b Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 18:49:12 -0700
+Subject: [PATCH] dos: cache the formatted score string instead of reformatting
+ per frame
+
+User-requested deep pass for further 486DX2-50 fps opportunities,
+ahead of a planned multi-tier build option and hardware-matrix
+benchmark sweep. Found by systematically re-checking the ENTIRE
+per-frame call sequence for gaps in this port's own render/flip/pump/
+logic timing diagnostics, rather than guessing at another render-loop
+or flip-path tweak: drawScore() (score.cpp) sits between the render
+loop and the present step, and none of the four existing diagnostics
+(RENDERDBG.LOG, FLIPDBG.LOG, PUMPDBG.LOG, LOGICDBG.LOG) actually cover
+it -- a real gap, confirmed by reading the exact bracket boundaries in
+game.cpp.
+
+Root cause: drawScore() called `autoSprintf("%d", inScore)`
+UNCONDITIONALLY every single frame, even though inScore only changes
+occasionally (chest pickups, exploration milestones crossed) -- not
+continuously. Read minorGems' vautoSprintf (stringUtils.cpp) to see
+exactly what that costs on the common (score < 50 chars) path: a
+`new char[50]` heap allocation, a full vsnprintf format-string parse
+for a single integer, a SECOND heap allocation (stringDuplicate to trim
+the buffer), then the original buffer freed -- two allocations and a
+full format parse, every frame, usually to reproduce the exact same
+string as last frame. This is the same class of cost this investigation
+has repeatedly found disproportionately expensive on DOS/DJGPP's real
+486-class hardware (matches patch 0012's blowUp.cpp heap-churn fix in
+shape, and CWSDPMI/DJGPP's own allocator is exactly the kind of thing
+that could pay real DPMI-host overhead per call).
+
+Fix: cache the formatted string and digit count in static variables,
+only reformatting when `inScore` actually differs from the last-cached
+value. The pixel-copy blit itself (the loop that actually draws numeral
+glyphs into gameImage) still runs every frame regardless -- gameImage is
+overwritten fresh by the render loop each frame, so that part can't be
+skipped -- this only removes the allocation/formatting work on the vast
+majority of frames where the score didn't change. Added a matching
+free in destroyScore() for symmetry with this file's existing init/
+destroy pattern (not a leak concern at process exit, just consistency).
+
+Verified under DOSBox-X: builds; visually confirmed score digits render
+correctly at title-dismiss and after several seconds of gameplay (same
+numeral glyphs, same position, no corruption); clean boot/play/ESCAPE-
+quit, no hang, hit ratios match the established pattern. Did not
+specifically capture a mid-session score-value CHANGE on camera this
+round (would need a longer/scripted play session to reliably trigger a
+chest pickup or exploration-score tick) -- confidence in the cache-
+invalidation logic itself comes from direct code review (a simple,
+unconditional `inScore != cachedScoreValue` check with no edge cases
+the original code didn't already have) rather than an observed digit
+transition; the pixel-copy path itself is byte-for-byte unchanged from
+before this patch, so correctness of the RENDERED output was never in
+question, only whether the cache would go stale (it can't, given the
+comparison covers every possible inScore transition unconditionally).
+Real-hardware confirmation (fps, and ideally a repeat RENDERDB.LOG/
+new drawScore-specific measurement if one gets added) on the 486DX2-50
+is the next step -- this fix was found and shipped while that CPU is
+still in the test rig, ahead of the planned benchmark sweep across
+other CPU/video-card configurations.
+---
+ gameSource/score.cpp | 72 ++++++++++++++++++++++++++++++--------------
+ 1 file changed, 50 insertions(+), 22 deletions(-)
+
+diff --git a/gameSource/score.cpp b/gameSource/score.cpp
+index 284c07a..5f41155 100644
+--- a/gameSource/score.cpp
++++ b/gameSource/score.cpp
+@@ -61,50 +61,78 @@ int getScoreHeight() {
+ 
+ 
+ 
++// DOS-PORT: cached across calls -- see drawScore's own comment below for
++// why. Freed (for symmetry with the rest of this file's own init/destroy
++// pattern, not because process exit wouldn't reclaim it anyway) in
++// destroyScore().
++static char *cachedScoreString = NULL;
++static int cachedScoreValue = 0;
++static char cachedScoreValueSet = false;
++static int cachedNumDigits = 0;
++
++
++
+ void drawScore( Uint32 *inImage, int inWidth, int inHeight, int inScore ) {
+-    
+-    char *scoreString = autoSprintf( "%d", inScore );
+-    
+-    int numDigits = strlen( scoreString );
+-    
+-    int xPosition = inWidth - numDigits * ( numeralW + 1 );
+-    
+-    for( int i=0; i<numDigits; i++ ) {
+-        char digit = scoreString[i];
+-        
++
++    // DOS-PORT: autoSprintf (two heap allocations plus a full vsnprintf
++    // format parse -- see minorGems' vautoSprintf) ran unconditionally
++    // every frame here, even though inScore only changes occasionally
++    // (chest pickups, exploration milestones), not continuously. This
++    // function sits between the render loop and the present step and
++    // isn't covered by any of this port's render/flip/pump/logic timing
++    // diagnostics -- a real, previously unmeasured per-frame cost, found
++    // by re-reading every piece of the frame for gaps in what's actually
++    // been measured. Cache the formatted digit string and only reformat
++    // when the score actually changed. gameImage itself is overwritten
++    // fresh every frame by the render loop, so the pixel-copy blit below
++    // still has to run every frame regardless -- this only removes the
++    // allocation/formatting work on the (vast majority of) frames where
++    // the score didn't change, not the blit itself.
++    if( !cachedScoreValueSet || inScore != cachedScoreValue ) {
++        delete [] cachedScoreString;
++        cachedScoreString = autoSprintf( "%d", inScore );
++        cachedNumDigits = strlen( cachedScoreString );
++        cachedScoreValue = inScore;
++        cachedScoreValueSet = true;
++        }
++
++    int xPosition = inWidth - cachedNumDigits * ( numeralW + 1 );
++
++    for( int i=0; i<cachedNumDigits; i++ ) {
++        char digit = cachedScoreString[i];
++
+         int digitNumber = digit - '0';
+-        
++
+         for( int y=0; y<numeralH; y++ ) {
+             int numeralY = y + digitNumber * ( numeralH + 1 );
+-            
++
+             for( int x=0; x<numeralW; x++ ) {
+                 int imageX = x + xPosition;
+-                
++
+                 // copy pixels
+                 inImage[ y * inWidth + imageX ] =
+                     numeralARGB[ numeralY * numeralW + x ];
+                 }
+             }
+-        
++
+         xPosition += numeralW + 1;
+         }
+-    
+-
+-    delete [] scoreString;
+-    
+-
+     }
+ 
+ 
+ 
+ void destroyScore() {
+     delete numeralImage;
+-    
+-    
++
++
+     delete [] numeralRed;
+     delete [] numeralGreen;
+     delete [] numeralBlue;
+ 
+     delete [] numeralARGB;
+-    
++
++    delete [] cachedScoreString;
++    cachedScoreString = NULL;
++    cachedScoreValueSet = false;
++
+     }
+-- 
+2.47.3
+

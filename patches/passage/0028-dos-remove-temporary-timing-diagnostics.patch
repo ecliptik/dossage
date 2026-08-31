@@ -1,0 +1,288 @@
+From 6f842234e384cfd7c1339cb2a417f45a249b20cd Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Mon, 31 Aug 2026 00:33:28 -0700
+Subject: [PATCH] dos: remove the temporary per-frame timing diagnostics
+
+Patches 0010-0026 added Time::getCurrentTime()-based instrumentation
+(RENDERDBG.LOG/FLIPDBG.LOG/PUMPDBG.LOG/LOGICDBG.LOG) to find the 486DX2-50
++Mach64 performance campaign's dominant costs. Each block was explicitly
+marked "TEMPORARY DIAGNOSTIC... to be reverted once measured".
+
+The 2026-08-30/31 S3 ViRGE investigation used them to build a full
+per-stage cost model on the LFB+16bpp path (see docs/PLAN.md's "Phase
+0/2 result"), then found real-hardware A/B evidence that the
+instrumentation itself has real cost: removing all 5 diagnostic
+timing/logging blocks (kept every real code path -- the render loop,
+blowupOntoScreenNative, SDL_UpdateWindowSurface/Rects, the audio pump
+while loop, all untouched) recovered a real, repeatable ~0.4-0.5fps on
+the 486DX2-66+S3 ViRGE rig (13.94/13.84fps with the diagnostics vs.
+14.38/14.50fps without, across four otherwise-identical real-hardware
+runs). A shipping build has no business paying per-frame
+fopen/fprintf/fclose overhead for measurements already taken.
+
+Follow-up bisection (also real-hardware verified, not committed as a
+permanent diagnostic) found the remaining gap to the 15fps KPI target
+is not a rendering-cost problem: real per-frame work (render+flip+
+pump+rest-of-loop) totals only ~45.6ms against the 66.7ms/frame budget
+for 15fps, so lockedFrameRate=15's own frame limiter is already
+correctly sleeping ~21ms by design. The residual ~2-5ms shortfall looks
+like ordinary SDL_Delay() overshoot on this DOS backend, not something
+this patch addresses.
+---
+ gameSource/game.cpp | 182 +++++---------------------------------------
+ 1 file changed, 21 insertions(+), 161 deletions(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 06dca89..2051c4d 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -266,9 +266,14 @@ SDL_Surface *renderSurface = NULL;
+ // way, regardless of how those pixels got populated.
+ void presentScreen( SDL_Surface *inScreen, SDL_Rect *inRect,
+                     char inFullUpdate ) {
+-#ifdef __DJGPP__
+-    double presentStartTime = Time::getCurrentTime();
+-#endif
++    // DOS-PORT: present-cost timing (was here through patch 0026) has
++    // served its purpose -- real-hardware measurement is done and the
++    // per-stage cost model is established (see docs/PLAN.md's "Phase
++    // 0/2 result"). A shipping build has no business paying the
++    // Time::getCurrentTime()-plus-fopen/fprintf/fclose cost of debug
++    // logging every 20 frames -- confirmed via A/B real-hardware test
++    // that removing all 5 of these diagnostic blocks recovers a real,
++    // repeatable ~0.4-0.5fps on the 486DX2-66+S3 ViRGE rig.
+ 
+     // DOS-PORT: SDL_UpdateWindowSurface() always builds an implicit
+     // FULL-window rect (see SDL_video.c) and hands it to the DOS
+@@ -287,27 +292,6 @@ void presentScreen( SDL_Surface *inScreen, SDL_Rect *inRect,
+         SDL_UpdateWindowSurfaceRects( window, inRect, 1 );
+         }
+ 
+-#ifdef __DJGPP__
+-    {
+-        double presentElapsed = Time::getCurrentTime() - presentStartTime;
+-        static double presentElapsedTotal = 0;
+-        static int presentFrameCount = 0;
+-        presentElapsedTotal += presentElapsed;
+-        presentFrameCount ++;
+-        if( presentFrameCount >= 20 ) {
+-            FILE *flipLog = fopen( "FLIPDBG.LOG", "a" );
+-            if( flipLog != NULL ) {
+-                fprintf( flipLog,
+-                         "[present-cost n=%d] present_avg_ms=%f\n",
+-                         presentFrameCount,
+-                         1000.0 * presentElapsedTotal / presentFrameCount );
+-                fclose( flipLog );
+-                }
+-            presentElapsedTotal = 0;
+-            presentFrameCount = 0;
+-            }
+-        }
+-#endif
+     }
+ 
+ 
+@@ -464,40 +448,10 @@ void flipGameImageOntoScreen( SDL_Surface *inScreen ) {
+             SDL_FillSurfaceRect( inScreen, NULL, 0 );
+             }
+ 
+-#ifdef __DJGPP__
+-        // TEMPORARY DIAGNOSTIC (FLIPDBG.LOG): this fast path fuses what
+-        // used to be two separately-timed steps (blowup + blit) into
+-        // one -- logged under its own tag so it isn't confused with the
+-        // fallback path's separate blowup-cost/blit-cost lines.
+-        double nativeStartTime = Time::getCurrentTime();
+-#endif
+-
+         blowupOntoScreenNative( gameImage,
+                                 width, totalImageHeight, blowUpFactor,
+                                 inScreen );
+ 
+-#ifdef __DJGPP__
+-        {
+-            double nativeElapsed = Time::getCurrentTime() - nativeStartTime;
+-            static double nativeElapsedTotal = 0;
+-            static int nativeFrameCount = 0;
+-            nativeElapsedTotal += nativeElapsed;
+-            nativeFrameCount ++;
+-            if( nativeFrameCount >= 20 ) {
+-                FILE *flipLog = fopen( "FLIPDBG.LOG", "a" );
+-                if( flipLog != NULL ) {
+-                    fprintf( flipLog,
+-                             "[native-cost n=%d] native_avg_ms=%f\n",
+-                             nativeFrameCount,
+-                             1000.0 * nativeElapsedTotal / nativeFrameCount );
+-                    fclose( flipLog );
+-                    }
+-                nativeElapsedTotal = 0;
+-                nativeFrameCount = 0;
+-                }
+-            }
+-#endif
+-
+         if( screenLocked ) {
+             SDL_UnlockSurface( inScreen );
+             }
+@@ -1130,21 +1084,9 @@ char playGame() {
+             }
+         
+ 
+-#ifdef __DJGPP__
+-        // TEMPORARY DIAGNOSTIC (RENDERDBG.LOG): direct measurement of the
+-        // per-pixel render loop's own cost, isolated from both the video
+-        // flush (already measured separately by the shared backend's own
+-        // instrumentation, ~50ms/flush on the 486DX2-50, confirmed NOT
+-        // the bottleneck by cross-build comparison) and the audio pump
+-        // (already fixed/bounded, confirmed NOT the dominant cost either
+-        // by the same comparison -- fps barely moved despite substantial
+-        // audio-side changes). Leading suspect: sampleFromWorldNoWeightHash's
+-        // isSpritePresent() scan (World.cpp), an O(numAnimations) linear
+-        // scan called for every pixel sample (two per on-screen pixel per
+-        // frame) -- O(width*height*animations) per frame. To be reverted
+-        // once measured.
+-        double renderLoopStartTime = Time::getCurrentTime();
+-#endif
++        // DOS-PORT: render-loop-cost timing (was here through patch
++        // 0026) served its purpose -- see presentScreen()'s own comment
++        // above for why it's removed now.
+ 
+         // DOS-PORT: worldX (and the intWorldX/aWeight/bWeight derived from
+         // it below) depends only on x, drawDX, and playerX -- NOT on y --
+@@ -1288,31 +1230,6 @@ char playGame() {
+ 
+                 }
+             }
+-#ifdef __DJGPP__
+-        {
+-            double renderLoopElapsed =
+-                Time::getCurrentTime() - renderLoopStartTime;
+-            static double renderLoopElapsedTotal = 0;
+-            static int renderLoopFrameCount = 0;
+-            renderLoopElapsedTotal += renderLoopElapsed;
+-            renderLoopFrameCount ++;
+-            if( renderLoopFrameCount >= 20 ) {
+-                FILE *renderLog = fopen( "RENDERDBG.LOG", "a" );
+-                if( renderLog != NULL ) {
+-                    fprintf( renderLog,
+-                             "[render-loop-cost n=%d] avg_ms=%f "
+-                             "animCount=%d width=%d height=%d\n",
+-                             renderLoopFrameCount,
+-                             1000.0 * renderLoopElapsedTotal /
+-                                 renderLoopFrameCount,
+-                             getAnimationListSize(), width, height );
+-                    fclose( renderLog );
+-                    }
+-                renderLoopElapsedTotal = 0;
+-                renderLoopFrameCount = 0;
+-                }
+-            }
+-#endif
+ 
+         drawScore( gameImage, width, height, score );
+         
+@@ -1448,38 +1365,14 @@ char playGame() {
+             // never directly measured), 4 calls could plausibly explain
+             // the remaining ~200ms gap on its own. Time the whole loop
+             // directly rather than assuming.
+-            double pumpLoopStartTime = Time::getCurrentTime();
+-
++            // DOS-PORT: pump-loop-cost timing (was here through patch
++            // 0026) served its purpose -- see presentScreen()'s own
++            // comment above for why it's removed now.
+             while( pumpIters < pumpMaxIters &&
+                    SDL_DOSAudioRingFillMs() < pumpClampedTargetMs &&
+                    SDL_DOSAudioPump() ) {
+                 pumpIters ++;
+                 }
+-
+-            {
+-                double pumpLoopElapsed = Time::getCurrentTime() - pumpLoopStartTime;
+-                static double pumpLoopElapsedTotal = 0;
+-                static int pumpLoopItersTotal = 0;
+-                static int pumpLoopFrameCount = 0;
+-                pumpLoopElapsedTotal += pumpLoopElapsed;
+-                pumpLoopItersTotal += pumpIters;
+-                pumpLoopFrameCount ++;
+-                if( pumpLoopFrameCount >= 20 ) {
+-                    FILE *pumpLog = fopen( "PUMPDBG.LOG", "a" );
+-                    if( pumpLog != NULL ) {
+-                        fprintf( pumpLog,
+-                                 "[pump-loop-cost n=%d] avg_ms=%f "
+-                                 "avg_iters=%f\n",
+-                                 pumpLoopFrameCount,
+-                                 1000.0 * pumpLoopElapsedTotal / pumpLoopFrameCount,
+-                                 (double)pumpLoopItersTotal / pumpLoopFrameCount );
+-                        fclose( pumpLog );
+-                        }
+-                    pumpLoopElapsedTotal = 0;
+-                    pumpLoopItersTotal = 0;
+-                    pumpLoopFrameCount = 0;
+-                    }
+-                }
+             }
+ #endif
+ 
+@@ -1528,22 +1421,13 @@ char playGame() {
+         lastFrameTimeStamp = Time::getCurrentTime();
+ 
+ 
+-#ifdef __DJGPP__
+-        // TEMPORARY DIAGNOSTIC (LOGICDBG.LOG): the render loop
+-        // (RENDERDBG.LOG), the present path (FLIPDBG.LOG), and the audio
+-        // pump (PUMPDBG.LOG) are all individually timed elsewhere in this
+-        // loop -- but everything from here to the end of the loop body
+-        // (input handling via getKeyDown(), which calls SDL_PumpEvents()
+-        // roughly ten times per frame; movement; stepAnimations(); the
+-        // SDL_PollEvent quit-check loop; chest/spouse/score bookkeeping)
+-        // has never been measured. Real-hardware data (486DX2-50) put
+-        // render loop (~46ms after patches 0015/0016) + flip (~56ms,
+-        // patches 0013/0014) + pump (~20-25ms) at roughly ~125ms against
+-        // a real ~145ms frame time -- only ~20ms of slack, so this
+-        // section is not expected to dominate, but "not expected to" has
+-        // been wrong more than once already in this investigation.
+-        double restOfLoopStartTime = Time::getCurrentTime();
+-#endif
++        // DOS-PORT: rest-of-loop-cost timing (was here through patch
++        // 0026) served its purpose -- see presentScreen()'s own comment
++        // above for why it's removed now. (Real-hardware data from that
++        // investigation: render+flip+pump+rest-of-loop totals only
++        // ~45.6ms against the 66.7ms/frame budget for 15fps -- plenty of
++        // headroom; the remaining gap to 15fps is `SDL_Delay()`
++        // overshoot, not rendering cost. See docs/PLAN.md.)
+ 
+ 
+         int spouseX, spouseY;
+@@ -1870,30 +1754,6 @@ char playGame() {
+             maxExploreScore = exploreScore;
+             }
+ 
+-#ifdef __DJGPP__
+-        {
+-            double restOfLoopElapsed =
+-                Time::getCurrentTime() - restOfLoopStartTime;
+-            static double restOfLoopElapsedTotal = 0;
+-            static int restOfLoopFrameCount = 0;
+-            restOfLoopElapsedTotal += restOfLoopElapsed;
+-            restOfLoopFrameCount ++;
+-            if( restOfLoopFrameCount >= 20 ) {
+-                FILE *logicLog = fopen( "LOGICDBG.LOG", "a" );
+-                if( logicLog != NULL ) {
+-                    fprintf( logicLog,
+-                             "[rest-of-loop-cost n=%d] avg_ms=%f\n",
+-                             restOfLoopFrameCount,
+-                             1000.0 * restOfLoopElapsedTotal /
+-                                 restOfLoopFrameCount );
+-                    fclose( logicLog );
+-                    }
+-                restOfLoopElapsedTotal = 0;
+-                restOfLoopFrameCount = 0;
+-                }
+-            }
+-#endif
+-
+         }
+ 
+     unsigned long netTime = time( NULL ) - startTime;
+-- 
+2.47.3
+

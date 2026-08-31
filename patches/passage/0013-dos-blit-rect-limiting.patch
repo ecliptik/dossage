@@ -1,0 +1,99 @@
+From ad6921abb20869db7e6785a5a10141cefc5a1e0a Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 14:43:47 -0700
+Subject: [PATCH] dos: limit the present blit to the sub-rect that actually
+ changed
+
+Real 486DX2-50 data from patch 0012's FLIPDBG.LOG found the actual
+dominant per-frame cost, after three prior hypotheses (video flush
+~50ms, render loop ~70ms, audio pump ~29ms) each came back real but not
+dominant: SDL_BlitSurface() in flipScreen() -- the renderSurface ->
+window-surface format-conversion blit -- measured ~145-160ms/frame, by
+far the largest single cost found in this whole investigation. Combined
+with the other three now-measured costs (~150ms total) and this new
+number, the running total (~300ms) finally accounts for essentially all
+of the real ~330ms average frame time.
+
+Root cause: the blit was unconditional and full-surface
+(SDL_BlitSurface(renderSurface, NULL, inScreen, NULL)), format-converting
+all 640x480 = 307,200 pixels every frame regardless of how much of the
+image actually changed. But blowupOntoScreen() (see blowUp.cpp, patch
+0012) only ever writes a centered sub-rect of renderSurface -- on this
+port's current 100x12 game image at 6x blowup, that's roughly 600x102 =
+61,200 pixels, about 1/5th of the full surface. The rest is static
+letterbox border that's black and unchanged frame to frame, except right
+after a blowUpChanged clear (SDL_FillSurfaceRect over the whole surface,
+which can change the border's visible size).
+
+Fix: compute the same sub-rect blowupOntoScreen uses (blowUpFactor *
+width/totalImageHeight, centered) and blit only that rect on a normal
+frame; fall back to the original full-surface blit only on the frame
+where blowUpChanged is still true (the one frame per change where the
+letterbox border itself needs to be pushed to the screen too, since it
+was just cleared). Uses two separate SDL_Rect values for src/dst rather
+than sharing one -- SDL_BlitSurface's dstrect parameter is mutated
+(clipped) in place, so aliasing it with the still-being-read srcrect
+would be a real bug, not just untidy.
+
+Verified under DOSBox-X: builds; visually confirmed clean rendering
+across two blowup-factor changes (pressed B twice, screenshotted each
+transition) -- no corruption, no stale border pixels left over from the
+smaller/larger previous rect, letterbox stays correctly black on both
+sides. FLIPDBG.LOG confirms the mechanism: blit_avg_ms dropped sharply
+on this host too (many windows reading ~0ms now, vs. ~8.5-15.5ms
+before this patch). Clean boot/play/ESCAPE-quit, no hang. Real-hardware
+confirmation on the 486DX2-50 (both the fps number and a repeat
+FLIPDBG.LOG capture) is the next step -- this is the first patch in
+this investigation with a real chance of closing most of the gap to the
+15fps KPI, not just ruling another hypothesis out.
+---
+ gameSource/game.cpp | 33 ++++++++++++++++++++++++++++++++-
+ 1 file changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 53fd251..d7503d7 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -278,7 +278,38 @@ void flipScreen( SDL_Surface *inScreen ) {
+     double blitStartTime = Time::getCurrentTime();
+ #endif
+ 
+-    SDL_BlitSurface( renderSurface, NULL, inScreen, NULL );
++    // DOS-PORT: blowupOntoScreen only ever writes a centered sub-rect of
++    // renderSurface (the actual blown-up game image) -- the rest of a
++    // full-screen (640x480) renderSurface is static letterbox border,
++    // unchanged frame to frame except right after a blowUpChanged clear.
++    // The original unconditional SDL_BlitSurface( ..., NULL, ..., NULL )
++    // format-converts all 307,200 pixels every frame regardless of how
++    // little of that actually changed. Real-hardware measurement
++    // (486DX2-50, FLIPDBG.LOG) found this costing ~145-160ms/frame -- by
++    // far the single largest per-frame cost found in this whole
++    // investigation, more than the render loop, the flush, and the audio
++    // pump combined. Limiting the blit to the sub-rect that actually
++    // changed cuts the pixel count roughly 5x on this port's current
++    // 100x12/6x-blowup configuration. Use two separate SDL_Rect values
++    // (not one shared between src/dst) since SDL_BlitSurface's dstrect
++    // parameter is mutated (clipped) in place -- aliasing it with srcrect
++    // would corrupt the still-unread source rect.
++    SDL_Rect srcRect;
++    srcRect.w = blowUpFactor * width;
++    srcRect.h = blowUpFactor * totalImageHeight;
++    srcRect.x = ( renderSurface->w - srcRect.w ) / 2;
++    srcRect.y = ( renderSurface->h - srcRect.h ) / 2;
++    SDL_Rect dstRect = srcRect;
++
++    if( blowUpChanged ) {
++        // the whole surface was just cleared this frame (letterbox
++        // border may have changed size too) -- blit everything, just
++        // this once.
++        SDL_BlitSurface( renderSurface, NULL, inScreen, NULL );
++        }
++    else {
++        SDL_BlitSurface( renderSurface, &srcRect, inScreen, &dstRect );
++        }
+ 
+ #ifdef __DJGPP__
+     double blitElapsed = Time::getCurrentTime() - blitStartTime;
+-- 
+2.47.3
+

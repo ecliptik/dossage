@@ -1,0 +1,287 @@
+From eeb81e697e07c2f21044f258b8f01102ce474064 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 15:32:29 -0700
+Subject: [PATCH] dos: hoist per-x worldX compression math out of the y loop
+
+Real 486DX2-50 data (RENDERDB.LOG, refetched from the same run that
+confirmed patch 0014's present-path fix) showed the render loop holding
+steady at ~63-102ms/frame across two rounds while blit and present both
+dropped sharply -- now the single largest named per-frame cost
+remaining (blowup+blit+present down to ~56ms combined this round vs.
+render loop's ~73ms).
+
+Root cause, found by reading the render loop directly: `worldX` (game.
+cpp, the perspective-compression math converting a screen column `x`
+into a world-space sample column) depends only on `x`, `drawDX`
+(per-frame, not per-pixel), and `playerX` -- NOT on `y`. But the
+original `for(y) for(x))` loop recomputed it, including two genuinely
+expensive transcendental calls (`tan()` and `pow()`) for every pixel
+outside a small 10px no-compression zone near the player, on every
+single `(x,y)` pair -- redundantly repeating the same per-x computation
+`height` (12) times per frame. That's up to 1200 tan/pow call pairs per
+frame when only 100 are ever actually distinct.
+
+Fix: hoist the whole worldX computation (and the `intWorldX`/`aWeight`/
+`bWeight` linear-interpolation values derived from it, and the
+`maxWorldX`/`minWorldX` tracking, which only ever read x-dependent
+values that don't vary across y) into a once-per-x precompute pass
+before the y loop, caching the results in three small heap arrays
+(grow-only static buffers, same pattern as blowUp.cpp's screenRowBuf
+fix) that the y loop then just looks up. Same math, same results --
+this is a pure hoist, not a change to the compression formula itself
+(deliberately scoped narrowly: change what's recomputed, not how it's
+computed, to keep this patch easy to verify against the original).
+Cuts the tan/pow call count 12x on this port's current 100x12 image
+(1200/frame -> 100/frame).
+
+Verified under DOSBox-X: builds; visually confirmed clean, correct
+scrolling and edge-compression behavior across several seconds of
+gameplay (two screenshots a few seconds apart show the character and
+world advancing normally, same compressed-edge visual pattern as every
+prior smoke test in this series) -- this patch changes actual per-pixel
+world-sample coordinates, so this comparison was deliberately more
+careful than a plain "does it still boot" check. RENDERDB.LOG dropped
+on this host too (was ~63-113ms in earlier DOSBox-X captures, now
+~14-20ms), though DOSBox-X timing was never authoritative for magnitude
+in this investigation -- confirms the mechanism, not the real-hardware
+payoff. Clean boot/play/ESCAPE-quit, no hang. Real-hardware
+confirmation on the 486DX2-50 (fps number plus a repeat RENDERDB.LOG
+capture) is the next step.
+---
+ gameSource/game.cpp | 211 ++++++++++++++++++++++++--------------------
+ 1 file changed, 113 insertions(+), 98 deletions(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 40ffcef..f2459d9 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -971,113 +971,128 @@ char playGame() {
+         // once measured.
+         double renderLoopStartTime = Time::getCurrentTime();
+ #endif
+-        for( int y=0; y<height; y++ ) {
+-            for( int x=0; x<width; x++ ) {
+ 
+-                //int worldX = (int)( pow( x / 2.0, 1.4 ) );
+-                
+-                // compression based on distance of pixel column from player
+-                double trueDistanceFromPlayer = drawDX + x - playerX;
+-                double maxDistance = width - 1;
+-                
+-                // cap it so that we don't force tan into infinity below
+-                double cappedDistanceFromPlayer = trueDistanceFromPlayer;
+-                if( cappedDistanceFromPlayer > maxDistance ) {
+-                    cappedDistanceFromPlayer = maxDistance;
+-                    }
+-                if( cappedDistanceFromPlayer < -maxDistance ) {
+-                    cappedDistanceFromPlayer = -maxDistance;
+-                    }
+-                
+-                // the world position we will sample from
+-                double worldX = x;
++        // DOS-PORT: worldX (and the intWorldX/aWeight/bWeight derived from
++        // it below) depends only on x, drawDX, and playerX -- NOT on y --
++        // but the original for(y) for(x) loop recomputed it, including two
++        // transcendental calls (tan() and pow()) for every pixel outside a
++        // small no-compression zone near the player, on every single (x,y)
++        // pair -- redundantly repeating the same per-x computation `height`
++        // times per frame (12x on this port's current 100x12 image). Real-
++        // hardware measurement (486DX2-50, RENDERDBG.LOG) found the render
++        // loop the largest single named per-frame cost remaining once the
++        // present-path fixes (patches 0013/0014) landed; this is the
++        // leading candidate given its shape (tan/pow are genuinely
++        // expensive on 486-class FPUs, and this cuts the call count 12x:
++        // 1200/frame -> 100/frame). Hoisted into a once-per-x precompute
++        // pass before the y loop -- same math, same results (maxWorldX/
++        // minWorldX tracking moves here too, harmless since it only reads
++        // x-dependent values that don't change across y).
++        static int *intWorldXCache = NULL;
++        static double *aWeightCache = NULL;
++        static double *bWeightCache = NULL;
++        static int worldXCacheCapacity = 0;
++        if( width > worldXCacheCapacity ) {
++            delete [] intWorldXCache;
++            delete [] aWeightCache;
++            delete [] bWeightCache;
++            intWorldXCache = new int[ width ];
++            aWeightCache = new double[ width ];
++            bWeightCache = new double[ width ];
++            worldXCacheCapacity = width;
++            }
+ 
+-                // zone around player where no x compression happens
+-                int noCompressZone = 10;
+-                
++        for( int x=0; x<width; x++ ) {
+ 
+-                if( trueDistanceFromPlayer > noCompressZone ) {
+-                    
+-                    worldX =
+-                        x + 
+-                        //(width/8) *
+-                        // use true distance as a factor so that compression
+-                        // continues at constant rate after we pass capped 
+-                        // distance
+-                        // otherwise, compression stops after capped distance
+-                        // Still... constant rate looks weird, so avoid
+-                        // it by not letting it pass capped distance
+-                        trueDistanceFromPlayer / 2 *
+-                        ( pow( tan( ( ( cappedDistanceFromPlayer - 
+-                                        noCompressZone ) / 
+-                                      (double)( width - noCompressZone ) ) * 
+-                                    M_PI / 2 ), 2) );
+-                    /*
+-                        trueDistanceFromPlayer / 2 *
+-                        ( tan( ( cappedDistanceFromPlayer / 
+-                                 (double)( width - 0.5 ) ) * M_PI / 2 ) );
+-                    */
+-                        // simpler formula
+-                    // actually, this does not approach 0 as 
+-                    // cappedDistanceFromPlayer approaches 0, so use tan 
+-                    // instead
+-                    //    ( trueDistanceFromPlayer / 2 ) * 100
+-                    //  / pow( ( width - cappedDistanceFromPlayer ), 1.6 );
+-                    }
+-                else if( trueDistanceFromPlayer < - noCompressZone ) {
+-                    worldX =
+-                        x + 
+-                        //(width/8) *
+-                        trueDistanceFromPlayer / 2 *
+-                        ( pow( tan( ( ( - cappedDistanceFromPlayer - 
+-                                        noCompressZone ) / 
+-                                      (double)( width - noCompressZone ) ) * 
+-                                    M_PI / 2 ), 2) );
+-                        /*
+-                        trueDistanceFromPlayer / 2 * 
+-                        ( tan( ( - cappedDistanceFromPlayer / 
+-                                 (double)( width - 0.5 ) ) * M_PI / 2 ) );
+-                        */
+-                        //( trueDistanceFromPlayer / 2 ) * 50
+-                        /// ( width + cappedDistanceFromPlayer );
+-                    }
+-                else {
+-                    // inside no-compresison zone
+-                    worldX = x;
+-                    }
+-                
+-                
+-                //int worldX = x;
+-                
+-                worldX += drawDX;
+-                
+-                if( worldX > maxWorldX ) {
+-                    maxWorldX = worldX;
+-                    }
+-                if( worldX < minWorldX ) {
+-                    minWorldX = worldX;
+-                    }
+-                
++            // compression based on distance of pixel column from player
++            double trueDistanceFromPlayer = drawDX + x - playerX;
++            double maxDistance = width - 1;
++
++            // cap it so that we don't force tan into infinity below
++            double cappedDistanceFromPlayer = trueDistanceFromPlayer;
++            if( cappedDistanceFromPlayer > maxDistance ) {
++                cappedDistanceFromPlayer = maxDistance;
++                }
++            if( cappedDistanceFromPlayer < -maxDistance ) {
++                cappedDistanceFromPlayer = -maxDistance;
++                }
++
++            // the world position we will sample from
++            double worldX = x;
++
++            // zone around player where no x compression happens
++            int noCompressZone = 10;
++
++
++            if( trueDistanceFromPlayer > noCompressZone ) {
++
++                worldX =
++                    x +
++                    // use true distance as a factor so that compression
++                    // continues at constant rate after we pass capped
++                    // distance
++                    // otherwise, compression stops after capped distance
++                    // Still... constant rate looks weird, so avoid
++                    // it by not letting it pass capped distance
++                    trueDistanceFromPlayer / 2 *
++                    ( pow( tan( ( ( cappedDistanceFromPlayer -
++                                    noCompressZone ) /
++                                  (double)( width - noCompressZone ) ) *
++                                M_PI / 2 ), 2) );
++                }
++            else if( trueDistanceFromPlayer < - noCompressZone ) {
++                worldX =
++                    x +
++                    trueDistanceFromPlayer / 2 *
++                    ( pow( tan( ( ( - cappedDistanceFromPlayer -
++                                    noCompressZone ) /
++                                  (double)( width - noCompressZone ) ) *
++                                M_PI / 2 ), 2) );
++                }
++            else {
++                // inside no-compresison zone
++                worldX = x;
++                }
++
++
++            worldX += drawDX;
++
++            if( worldX > maxWorldX ) {
++                maxWorldX = worldX;
++                }
++            if( worldX < minWorldX ) {
++                minWorldX = worldX;
++                }
++
++            // linear interpolation of two samples for worldX
++            int intWorldX = (int)floor( worldX );
++
++            double bWeight = worldX - intWorldX;
++            double aWeight = 1 - bWeight;
++
++            intWorldXCache[x] = intWorldX;
++            aWeightCache[x] = aWeight;
++            bWeightCache[x] = bWeight;
++            }
++
++        for( int y=0; y<height; y++ ) {
++            for( int x=0; x<width; x++ ) {
+ 
+                 int worldY = (int)floor( y + dY );
+-                
+ 
+-                // linear interpolation of two samples for worldX
+-                int intWorldX = (int)floor( worldX );
+-                
+-                double bWeight = worldX - intWorldX;
+-                double aWeight = 1 - bWeight;
+-                
+-                                
+-                Uint32 sampleA = 
++                int intWorldX = intWorldXCache[x];
++                double aWeight = aWeightCache[x];
++                double bWeight = bWeightCache[x];
++
++                Uint32 sampleA =
+                     sampleFromWorld( intWorldX, worldY, aWeight );
+-                Uint32 sampleB = 
++                Uint32 sampleB =
+                     sampleFromWorld( intWorldX + 1, worldY, bWeight );
+-                
+-                
+-                
++
++
++
+                 Uint32 combined = sampleB + sampleA;
+-                                
++
+ 
+                 gameImage[ ( y + scoreHeight ) * width + x ] = combined;
+ 
+-- 
+2.47.3
+

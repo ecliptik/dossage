@@ -1,0 +1,92 @@
+From 757f8000e0a61a69fc3bfcbd4eb3d2ea57c0168a Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 17:28:47 -0700
+Subject: [PATCH] dos: add a diagnostic for the settings-file read itself
+
+Real 486DX2-50 data from patch 0019 (320x240 resolution request) came
+back showing "Screen dimensions for fullscreen mode: 640x480" -- the
+change never visibly took effect. Two increasingly specific theories
+were checked and ruled out with real evidence, not assumption:
+
+1. Settings-transfer gap (the ini files never reached the rig): ruled
+   out -- vcctrl fetched settings/width.ini and height.ini directly off
+   the real machine and their sha256 matched this repo's own
+   build/stage/settings/*.ini exactly. The files genuinely say
+   "320"/"240" on the real hardware.
+2. CWD mismatch at launch (SettingsManager resolves "settings/
+   width.ini" relative to the process's CWD, not the exe's own
+   location -- confirmed by reading SettingsManager.cpp directly):
+   ruled out -- vcctrl confirmed their launch procedure does `CD
+   \DOSSAGE` before running DOSSAGE.EXE every round, landing CWD
+   exactly where settings/ lives.
+
+Read minorGems' File.h/PathDOS.cpp looking for a third mechanism (text-
+mode CRLF-translation quirks, forward-slash delimiter handling) but
+found nothing that should affect this specific 3-byte, no-newline file
+on DJGPP (whose DOS Path implementation deliberately mirrors the Linux
+one, per PathDOS.cpp's own comment, precisely because DJGPP's libc
+handles '/' and POSIX-style paths the same way on real DOS).
+
+Rather than keep guessing at a fourth mechanism, this instruments the
+actual read directly: prints `SettingsManager::getIntSetting`'s
+found-flag AND returned value for both "width" and "height" to stdout,
+right where they're read (game.cpp, before the override-defaults
+check). No new log file -- reuses the STDOUT.TXT redirect every real-
+hardware round already captures. This pins down definitively whether
+the divergence is at the File/Path layer (found=false despite the file
+existing) or a parsing layer (found=true but the wrong value) --
+either answer is useful, and guessing further without it risks chasing
+a mechanism that isn't the real one, same lesson this whole
+investigation has learned repeatedly.
+
+Verified under DOSBox-X (redirected stdout this time, not just a
+screenshot): `width found=1 value=320, height found=1 value=240` --
+correct as always on this harness, confirms the diagnostic itself
+works and prints exactly the expected format. Real-hardware data is
+the actual test.
+---
+ gameSource/game.cpp | 23 +++++++++++++++++++++--
+ 1 file changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index a51f471..61d6154 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -730,13 +730,32 @@ int mainFunction( int inArgCount, char **inArgs ) {
+     char heightFound = false;
+     int readHeight = SettingsManager::getIntSetting( "height",
+                                                     &heightFound );
+-    
++
++#ifdef __DJGPP__
++    // TEMPORARY DIAGNOSTIC: real-hardware data (486DX2-50, 2026-08-27)
++    // showed "Screen dimensions for fullscreen mode: 640x480" printed
++    // even after independently confirming (sha256, not TYPE+OCR) that
++    // settings/width.ini and height.ini genuinely say "320"/"240" on
++    // that exact machine, and that CWD at launch is correctly
++    // C:\DOSSAGE (settings/ resolves correctly relative to it) -- ruling
++    // out both a transfer gap and a CWD mismatch. This exposes exactly
++    // where the read diverges from the file content: whether
++    // SettingsManager::getIntSetting reports found=false at all (a
++    // File/Path-layer problem below this line) or found=true with the
++    // wrong value (a parsing problem). No new log file needed -- reuses
++    // the STDOUT.TXT redirect every real-hardware round already
++    // captures.
++    printf( "DOS-PORT settings diagnostic: width found=%d value=%d, "
++            "height found=%d value=%d\n",
++            (int)widthFound, readWidth, (int)heightFound, readHeight );
++#endif
++
+     if( widthFound && heightFound ) {
+         // override hard-coded defaults
+         screenWidth = readWidth;
+         screenHeight = readHeight;
+         }
+-    
++
+     printf( "Screen dimensions for fullscreen mode:  %dx%d\n",
+             screenWidth, screenHeight );
+     
+-- 
+2.47.3
+

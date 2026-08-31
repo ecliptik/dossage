@@ -1,0 +1,117 @@
+From d94c6442d3d1e53f5ff72d22ed188889ce681d51 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 16:02:19 -0700
+Subject: [PATCH] dos: add a diagnostic for everything after the audio pump in
+ the loop
+
+Per-fix real-hardware gains have been shrinking (blit-rect-limiting
++52%, present-rect-limiting +26%, worldX-hoist +14%, HashTable-bitmask
++4.7%), and after patches 0015/0016 the render loop no longer has an
+obvious next hoist-style bug -- its remaining ~46ms is spread across
+several smaller things (cache-miss-only chest/noise checks, the
+inherent cost of sampling twice per pixel) with no single dominant
+culprit found by re-reading it further. Rather than keep guessing
+inside the render loop, this instruments a part of the frame that has
+never been measured at all: everything from "start timing next frame"
+(after the SDL_Delay pacing call) to the end of the while loop body --
+input handling via getKeyDown() (which calls SDL_PumpEvents() roughly
+ten times per frame, once per key checked), movement, stepAnimations(),
+the SDL_PollEvent quit-check loop, and chest/spouse/score bookkeeping.
+
+Running tally going into this: render loop ~46ms (patches 0015/0016) +
+flip (blowup+blit+present) ~56ms (patches 0012-0014) + audio pump
+~20-25ms (patches 0007/0008) = ~125ms against a real ~145ms average
+frame time (486DX2-50, patch 0016's confirmation round) -- only ~20ms
+of slack expected here, so this section is not expected to dominate.
+Given this investigation's track record (the last several "not expected
+to dominate" guesses were each wrong at least once before being ruled
+out with real data), measuring directly rather than assuming is still
+the right call.
+
+Adds `LOGICDBG.LOG` (`__DJGPP__`-guarded, temporary, same 20-frame-
+window pattern as the other three diagnostics in this series): times
+the whole span, logs `[rest-of-loop-cost n=20] avg_ms=...`. No behavior
+change -- purely additive timing around code that's otherwise
+untouched.
+
+Verified under DOSBox-X: builds, boots, plays normally, LOGICDBG.LOG
+populates (avg_ms 3.0-5.5 on this host -- small, as the ~20ms-of-slack
+estimate above would suggest, though DOSBox-X magnitude has never been
+authoritative in this investigation). Clean boot/play/ESCAPE-quit, no
+hang. Real-hardware measurement on the 486DX2-50 is the next step, to
+see whether this section holds to the ~20ms slack estimate or turns out
+to be another underestimated cost.
+---
+ gameSource/game.cpp | 48 +++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 44 insertions(+), 4 deletions(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index f2459d9..7db0c44 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -1315,7 +1315,24 @@ char playGame() {
+ 
+         // start timing next frame
+         lastFrameTimeStamp = Time::getCurrentTime();
+-        
++
++
++#ifdef __DJGPP__
++        // TEMPORARY DIAGNOSTIC (LOGICDBG.LOG): the render loop
++        // (RENDERDBG.LOG), the present path (FLIPDBG.LOG), and the audio
++        // pump (PUMPDBG.LOG) are all individually timed elsewhere in this
++        // loop -- but everything from here to the end of the loop body
++        // (input handling via getKeyDown(), which calls SDL_PumpEvents()
++        // roughly ten times per frame; movement; stepAnimations(); the
++        // SDL_PollEvent quit-check loop; chest/spouse/score bookkeeping)
++        // has never been measured. Real-hardware data (486DX2-50) put
++        // render loop (~46ms after patches 0015/0016) + flip (~56ms,
++        // patches 0013/0014) + pump (~20-25ms) at roughly ~125ms against
++        // a real ~145ms frame time -- only ~20ms of slack, so this
++        // section is not expected to dominate, but "not expected to" has
++        // been wrong more than once already in this investigation.
++        double restOfLoopStartTime = Time::getCurrentTime();
++#endif
+ 
+ 
+         int spouseX, spouseY;
+@@ -1641,10 +1658,33 @@ char playGame() {
+         if( exploreScore > maxExploreScore ) {
+             maxExploreScore = exploreScore;
+             }
+-            
+-        
++
++#ifdef __DJGPP__
++        {
++            double restOfLoopElapsed =
++                Time::getCurrentTime() - restOfLoopStartTime;
++            static double restOfLoopElapsedTotal = 0;
++            static int restOfLoopFrameCount = 0;
++            restOfLoopElapsedTotal += restOfLoopElapsed;
++            restOfLoopFrameCount ++;
++            if( restOfLoopFrameCount >= 20 ) {
++                FILE *logicLog = fopen( "LOGICDBG.LOG", "a" );
++                if( logicLog != NULL ) {
++                    fprintf( logicLog,
++                             "[rest-of-loop-cost n=%d] avg_ms=%f\n",
++                             restOfLoopFrameCount,
++                             1000.0 * restOfLoopElapsedTotal /
++                                 restOfLoopFrameCount );
++                    fclose( logicLog );
++                    }
++                restOfLoopElapsedTotal = 0;
++                restOfLoopFrameCount = 0;
++                }
++            }
++#endif
++
+         }
+-    
++
+     unsigned long netTime = time( NULL ) - startTime;
+     double frameRate = frameCount / (double)netTime;
+     
+-- 
+2.47.3
+

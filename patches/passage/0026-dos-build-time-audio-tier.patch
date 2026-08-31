@@ -1,0 +1,174 @@
+From 672f26760d0eba90610a1bb9f1582013ee4a57c9 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 19:49:28 -0700
+Subject: [PATCH] dos: make sample rate and channel count build-time
+ configurable
+
+User request, after the 22050Hz/mono quality-vs-fps tradeoff became
+concrete (real-hardware data: 22050Hz stereo not yet measured, 22050Hz
+mono 9.45fps with real listening-confirmed occasional stutter, 11025Hz
+mono ~10.4-10.6fps with essentially free audio-pump cost): a build-time
+option rather than a single hardcoded choice, so a higher-end target
+can ship fuller stereo audio while a lower-end target (like the
+486DX2-50 this whole investigation has been tuning for) ships the
+cheaper mono config -- with the actual tier boundary to be determined
+by a hardware-matrix benchmark sweep (currently blocked -- the
+operator has deferred CPU/video-card swaps -- so this ships with
+reasonable defaults now, to be revisited once that data exists).
+
+`sampleRate` and `startMusic()`'s `audioFormat.channels` now come from
+two new preprocessor defines, `DOSSAGE_SAMPLE_RATE`/
+`DOSSAGE_AUDIO_CHANNELS`, with `#ifndef` fallbacks to the high tier
+(22050/2) for any standalone/IDE compile that doesn't go through the
+Makefile -- every real build always defines both explicitly (see the
+companion Makefile change). `audioCallback()`'s frame-size rounding
+(previously hardcoded to 2 bytes/frame for mono, from patch 0022)
+generalizes to `DOSSAGE_AUDIO_CHANNELS * 2` so it stays correct at
+either tier automatically.
+
+Companion changes, in the outer dossage repo (not vendored/patched):
+`Makefile` gains an `AUDIO_TIER` variable (`high` default, or `low`)
+that computes the two `-D` flags and threads them through both
+`GAME_CXXFLAGS` and the `render-music` target, plus a stamp-file
+mechanism forcing a full object rebuild whenever `AUDIO_TIER` actually
+changes between invocations -- the existing `%.o: %.cpp` pattern rule
+has no Makefile-variable dependency tracking, so switching tiers
+without it would silently relink stale objects built with the PREVIOUS
+tier's flags, which is a real correctness hazard (a channel-count
+mismatch between the compiled-in format and whatever SONG.WAV actually
+ships sounds like wrong-speed/wrong-pitch playback, not an error
+message -- exactly the bug class patch 0022 was careful to avoid the
+first time). `tools/render-music/render_music.cpp` reads the same
+`DOSSAGE_AUDIO_CHANNELS` define and only downmixes to mono at the low
+tier -- the synthesis stage always runs at full stereo fidelity either
+way, only the final WAV write differs.
+
+Verified: rebuilt and re-rendered both tiers from a clean state.
+Low tier (11025Hz mono) produced a BYTE-IDENTICAL `DOSSAGE.EXE` and
+`SONG.WAV` to the already real-hardware-validated patch-0025 build
+(same sha256 for both files) -- this refactor changes nothing
+observable about the config already running on the 486DX2-50, so no
+new real-hardware round is needed to re-validate it. High tier
+(22050Hz stereo) is a genuinely new combination -- verified under
+DOSBox-X only so far: builds, `SONG.WAV` loads and the audio device
+opens without error (no "Unable to load"/"Unable to open audio"
+messages in a redirected-stdout run), boots, plays, exits cleanly.
+Also confirmed the AUDIO_TIER stamp mechanism itself: switching tiers
+without a manual clean correctly forced a full rebuild (verified via
+the compiler invocation log showing all 19 sources recompiling with
+the new tier's flags); rebuilding the same tier again did nothing,
+confirming normal incremental builds aren't disturbed. Real-hardware
+confirmation of the high tier (stereo 22050Hz specifically, not
+previously measured -- only mono at that rate has real data) is
+still open, whenever that becomes a priority again.
+---
+ gameSource/musicPlayer.cpp | 77 ++++++++++++++++++++++++--------------
+ 1 file changed, 48 insertions(+), 29 deletions(-)
+
+diff --git a/gameSource/musicPlayer.cpp b/gameSource/musicPlayer.cpp
+index d314813..b3da199 100644
+--- a/gameSource/musicPlayer.cpp
++++ b/gameSource/musicPlayer.cpp
+@@ -16,17 +16,28 @@
+ #include <math.h>
+ #include <stdlib.h>
+ 
+-// DOS-PORT: back to 11025Hz for this round -- real-hardware measurement
+-// confirmed 22050Hz costs real fps (10.58 -> 9.45 on the 486DX2-50,
+-// matching the user's own "occasional stutter" listening report), and
+-// this round is specifically testing the drawScore() fix against the
+-// best-known 486DX2-50 config (11025Hz mono) while that exact CPU is
+-// still in the rig, ahead of a planned multi-tier build option
+-// (this rate is one tier's default) and a full hardware-matrix
+-// benchmark sweep -- neither implemented yet, this is still a single
+-// hardcoded global. See the git history on this line for the full
+-// 11025/22050/44100 tradeoff writeup.
+-int sampleRate = 11025;
++// DOS-PORT: build-time audio tier. Real-hardware measurement on the
++// port's minimum-target CPU (486DX2-50) found a genuine quality-vs-fps
++// tradeoff between 22050Hz stereo (fuller, more high-frequency content,
++// but ~9.45fps, "occasionally stutters" per direct listening) and
++// 11025Hz mono (lower fidelity, but ~10.4-10.6fps, essentially free
++// audio-pump cost). Rather than pick one, the Makefile's AUDIO_TIER
++// variable selects between them at build time (default: high --
++// DOSSAGE_SAMPLE_RATE/DOSSAGE_AUDIO_CHANNELS come from
++// -D flags in GAME_CXXFLAGS; AUDIO_TIER=low sets 11025/1 instead). The
++// #ifndef fallback below only matters for a standalone/IDE compile that
++// doesn't go through the Makefile -- every real build always defines
++// both. See tools/render-music/render_music.cpp for the matching
++// tier-aware WAV-rendering logic (stereo write vs. mono downmix), which
++// must stay in sync with whatever this port actually plays back.
++#ifndef DOSSAGE_SAMPLE_RATE
++#define DOSSAGE_SAMPLE_RATE 22050
++#endif
++#ifndef DOSSAGE_AUDIO_CHANNELS
++#define DOSSAGE_AUDIO_CHANNELS 2
++#endif
++
++int sampleRate = DOSSAGE_SAMPLE_RATE;
+ 
+ 
+ 
+@@ -367,11 +378,15 @@ void audioCallback( void *inUserData, SDL_AudioStream *inStream,
+         return;
+         }
+ 
+-    // round up to a whole number of mono S16 frames (2 bytes/frame) --
+-    // SONG.WAV is mono now (see startMusic's own comment on
+-    // audioFormat.channels), NOT the stereo 4-bytes/frame convention
+-    // synthesizeAudioCallback above (and this function, before) used.
+-    int numBytes = ( ( inAdditionalAmount + 1 ) / 2 ) * 2;
++    // round up to a whole number of S16 frames at this build's tier
++    // (DOSSAGE_AUDIO_CHANNELS * 2 bytes/frame -- 2 for mono, 4 for
++    // stereo). Everything else below (songReadPos, numSongSamples,
++    // wraparound) is already sample-count-based, not frame-pair-based,
++    // so it needs no further tier-awareness.
++    const int bytesPerFrame = DOSSAGE_AUDIO_CHANNELS * 2;
++    int numBytes =
++        ( ( inAdditionalAmount + bytesPerFrame - 1 ) / bytesPerFrame )
++        * bytesPerFrame;
+ 
+     Uint8 *outputBuffer = new Uint8[ numBytes ];
+ 
+@@ -699,21 +714,25 @@ void startMusic( const char *inTGAFileName ) {
+ 
+     SDL_AudioSpec audioFormat;
+ 
+-    /* Set 16-bit MONO audio at sampleRate (11025Hz -- see the comment
+-       above the global). DOS-PORT: SONG.WAV is rendered mono (see
+-       tools/render-music/render_music.cpp's downmix step) specifically
+-       to halve the audio-pump loop's per-chunk byte count -- real-
+-       hardware measurement found that loop a real, if secondary,
+-       per-frame cost. This is a deliberate fidelity tradeoff (Passage's
+-       music has genuine independent per-note left/right loudness,
+-       collapsed here), not a bug -- must match audioCallback's own
+-       mono-frame-size assumption below and the WAV file's actual
+-       channel count exactly, or SDL will misinterpret consecutive mono
+-       samples as alternating stereo channels (audible as roughly
+-       half-speed, wrong-pitch playback, not just quieter). */
++    /* Set 16-bit audio at this build's tier (sampleRate/channels --
++       see DOSSAGE_SAMPLE_RATE/DOSSAGE_AUDIO_CHANNELS above). DOS-PORT:
++       the low tier renders SONG.WAV mono (see tools/render-music/
++       render_music.cpp's downmix step) specifically to cut the audio-
++       pump loop's per-chunk byte count -- real-hardware measurement
++       found that loop a real, if secondary, per-frame cost, and mono
++       is a deliberate fidelity tradeoff (Passage's music has genuine
++       independent per-note left/right loudness, collapsed at that
++       tier), not a bug. Must match audioCallback's own frame-size
++       calculation below and the WAV file's actual channel count
++       exactly, or SDL will misinterpret consecutive samples as the
++       wrong number of channels (audible as wrong-speed, wrong-pitch
++       playback, not just a fidelity loss) -- this is why both this
++       file and the render tool read the same DOSSAGE_AUDIO_CHANNELS
++       define from the same Makefile variable, rather than each
++       hardcoding a channel count that could drift out of sync. */
+     audioFormat.freq = sampleRate;
+     audioFormat.format = SDL_AUDIO_S16;
+-    audioFormat.channels = 1;
++    audioFormat.channels = DOSSAGE_AUDIO_CHANNELS;
+ 
+ #ifdef __DJGPP__
+     // DOS-PORT: request the PHYSICAL device open at sampleRate too, not
+-- 
+2.47.3
+

@@ -1,0 +1,127 @@
+From bc782a9d9745604b11cd9dca59a4f20ab014bbdd Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 16:57:11 -0700
+Subject: [PATCH] dos: request 320x240 instead of 640x480
+
+Independent peer review (session "dossage-24", operator-requested perf
+audit, arrived mid-implementation of patch 0018) found a structural gap
+against doskutsu (a sibling DOS port on this hub that hits 17.8-18.6fps
+on the same 486DX2-50): doskutsu locks 320x240 fullscreen; dossage has
+been running 640x480. At 320x240, blowUpFactor drops from 6 to 3
+(maxBlowUpFactor = screenWidth / width, game.cpp), so the blown-up
+sub-rect shrinks roughly 4x in pixel count through every stage of the
+flip path (blowup/native-write, and present) -- no fidelity loss, since
+gameImage stays 100x12 native regardless of display resolution; the
+game just gets shown with less upscaling.
+
+Two changes:
+
+1. `settings/width.ini` 640 -> 320, `settings/height.ini` 480 -> 240.
+   Read via SettingsManager at startup (game.cpp ~700-716) and override
+   the hard-coded screenWidth/screenHeight defaults -- a data-file
+   change, not a code change, so there's no game logic to get wrong
+   here.
+
+2. `SDL_SetHint( SDL_HINT_DOS_PIN_WINDOW_TO_NATIVE_MODE, "1" )` before
+   SDL_Init (game.cpp), alongside the existing
+   SDL_HINT_DOS_ALLOW_DIRECT_FRAMEBUFFER hint. Per that hint's own doc
+   comment (SDL_hints.h): SDL3's window/fullscreen reconciliation can
+   fire a second, later mode-set call to the display's hard-coded
+   "desktop mode" (640x480 on this backend) after the app's own
+   requested-dimensions mode-set already succeeded, silently discarding
+   the smaller mode the app actually asked for -- doskutsu needed this
+   exact hint for the same 320x240-on-this-hub's-backend scenario. Set
+   unconditionally since it's documented as a no-op when the app-
+   requested mode was never honored in the first place.
+
+**Real uncertainty, not glossed over**: that same hint's doc comment
+explicitly calls out this port's actual test rig's card -- "ATI Mach64
++ M64VBE... doesn't expose any 320x240 modes because the Mach64-CT chip
+lacks line-doubling circuitry" -- as a case where the app-requested
+mode may never be honored at all, silently falling back to 640x480
+regardless of this patch. UniVBE (the software VESA extender this rig
+actually boots through, confirmed via this repo's own earlier
+`oem_string='Universal VESA VBE 6.70'` finding) might still synthesize
+320x240 via software scan-doubling even if the card ROM alone can't --
+but that's a real question needing real-hardware confirmation, not an
+assumption either way.
+
+Verified under DOSBox-X (S3 Trio64 emulation): `SDLDBG.LOG` confirms
+`mode-set #1 (entry): requested id=0x0190 320x240 32bpp` succeeded,
+`vram_w=320 vram_h=240 fb_size=307200` -- this emulated card DOES have
+a 320x240 mode (unlike what's documented for the real Mach64), so this
+test confirms the settings-read/hint mechanism works correctly but
+can't confirm whether the real rig's mode negotiation succeeds the same
+way. Game rendered correctly at the new resolution (screenshot
+comparison unaffected by DOSBox-X's own window-scaling display
+behavior, which is unrelated to the actual internal VESA mode).
+FLIPDBG.LOG shows the native-format fast path (patch 0018) stayed
+active at the new resolution too. Clean boot/play/ESCAPE-quit, no hang.
+
+Real-hardware confirmation is the essential next step -- specifically,
+whether `SDLDBG.LOG`'s own mode-set line and the printed "Screen
+dimensions for fullscreen mode" line actually show 320x240 taking
+effect on the real Mach64+UniVBE rig, or whether it silently stays at
+640x480 (which would mean this specific fix is a no-op on this
+hardware, useful to know either way, and would still leave patch
+0018's own real win intact regardless).
+---
+ gameSource/game.cpp            | 22 ++++++++++++++++++++++
+ gameSource/settings/height.ini |  2 +-
+ gameSource/settings/width.ini  |  2 +-
+ 3 files changed, 24 insertions(+), 2 deletions(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 71c6918..a51f471 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -666,6 +666,28 @@ int mainFunction( int inArgCount, char **inArgs ) {
+     // <SDL3/SDL_dosvesa_directaccess.h>'s "When to use this" section).
+     // Must be set before SDL_Init.
+     SDL_SetHint( SDL_HINT_DOS_ALLOW_DIRECT_FRAMEBUFFER, "1" );
++
++    // DOS-PORT: this port now requests 320x240 (settings/width.ini,
++    // settings/height.ini -- see the maxBlowUpFactor comment below) to
++    // cut per-frame pixel counts through the whole flip path roughly 4x
++    // versus the previous 640x480 default, following the same pattern
++    // doskutsu already uses successfully on this hub's shared backend.
++    // SDL3's window/fullscreen reconciliation can fire a SECOND, later
++    // mode-set call to the display's hard-coded "desktop mode" (640x480
++    // on this backend) after the app's own requested-dimensions mode-set
++    // already succeeded -- without this hint, that second call can win,
++    // silently discarding the smaller mode the app actually asked for
++    // (see SDL_HINT_DOS_PIN_WINDOW_TO_NATIVE_MODE's own doc comment for
++    // the full mechanism and a from-life example of the resulting bug:
++    // "game renders only in a small box in the corner of the screen").
++    // Explicitly harmless if the app-requested mode was never honored in
++    // the first place -- e.g. this specific rig's ATI Mach64 chip is
++    // separately documented as exposing no native 320x240 VBE mode at
++    // all (no line-doubling circuitry), so this hint alone does not
++    // guarantee 320x240 actually takes effect here; only real-hardware
++    // confirmation of the boot log's negotiated mode does. Set
++    // regardless since it's a no-op when not needed.
++    SDL_SetHint( SDL_HINT_DOS_PIN_WINDOW_TO_NATIVE_MODE, "1" );
+ #endif
+ 
+     // DOS-PORT: SDL3 removed SDL_INIT_NOPARACHUTE (no signal-handler
+diff --git a/gameSource/settings/height.ini b/gameSource/settings/height.ini
+index 7ad8022..eaea6f5 100644
+--- a/gameSource/settings/height.ini
++++ b/gameSource/settings/height.ini
+@@ -1 +1 @@
+-480
+\ No newline at end of file
++240
+\ No newline at end of file
+diff --git a/gameSource/settings/width.ini b/gameSource/settings/width.ini
+index c328260..194ba8c 100644
+--- a/gameSource/settings/width.ini
++++ b/gameSource/settings/width.ini
+@@ -1 +1 @@
+-640
+\ No newline at end of file
++320
+\ No newline at end of file
+-- 
+2.47.3
+

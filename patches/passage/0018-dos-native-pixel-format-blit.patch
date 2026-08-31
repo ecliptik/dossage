@@ -1,0 +1,469 @@
+From 8cf95252e85d6d9a711aa8919f9c0871e73414cd Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 16:42:07 -0700
+Subject: [PATCH] dos: pack pixels directly into the window surface's own
+ format
+
+Per user direction (a real structural change was requested after the
+render-loop-tail diagnostic confirmed the frame-time budget is now
+essentially fully mapped, with no more "safe hoist" fix left): flip
+(blowup + blit + present) is the single largest per-frame cost (~56ms,
+edging out the render loop's ~46ms), and its largest component is
+SDL_BlitSurface's format-conversion pass (~25-37ms even after patch
+0013's rect-limiting).
+
+The renderSurface + blit design exists because of a real, confirmed
+real-hardware bug: patch 0003 found raw Uint32 writes (assuming 32bpp
+XRGB) corrupted an actual Mach64 card, which only offers banked 24bpp,
+no 32bpp mode at all (this repo's own video-corruption investigation,
+2026-08-26). But the actual problem there was writing an UNVERIFIED
+format, not writing the real format -- the original pre-DOS-port code
+never checked what format the window surface actually negotiated
+before writing into it.
+
+This fixes that properly instead of routing around it a second time:
+`blowupOntoScreenNative()` (blowUp.cpp) packs each source pixel into
+the window surface's OWN native format via `SDL_MapSurfaceRGB()` (which
+reads the surface's real `SDL_PixelFormatDetails` -- Rmask/Gmask/Bmask/
+shifts, whatever they actually are), and writes those packed bytes
+directly into the window surface's pixel buffer. This eliminates the
+separate blit-conversion pass entirely -- no renderSurface intermediate,
+no format mismatch, because the write is now format-aware rather than
+format-assuming. Verified the byte-order convention for 3-bytes-per-
+pixel writes (the case that actually matters for the real Mach64
+target) against SDL's own `SDL_FillSurfaceRect3` in `SDL_fillrect.c`:
+little-endian, low-byte-first -- exactly what a `memcpy` of an SDL
+`Uint32`'s low N bytes already produces on this x86 target, so no
+manual byte-shuffling was needed.
+
+Only takes this fast path for 2/3/4-bytes-per-pixel destination
+formats (checked once, at first flip, via `SDL_GetPixelFormatDetails`)
+-- an indexed/paletted format would need a genuinely different, quality-
+changing nearest-palette-color approach that's out of scope here, so
+that case (and any other unexpected format) falls back to the exact
+prior renderSurface + blit path unchanged, still real-hardware-verified
+for that scenario. `flipScreen()`'s present step (`SDL_UpdateWindow-
+Surface`/`Rects`, unaffected by this patch -- its job is flushing
+window->surface->pixels to VRAM regardless of how those pixels got
+populated) is factored into a shared `presentScreen()` so both the fast
+path and the fallback path present identically.
+
+FLIPDBG.LOG's log lines change shape: the old combined
+`[flip-cost] blit_avg_ms=... present_avg_ms=...` line is now
+`[blit-cost] blit_avg_ms=...` (fallback path only) and
+`[present-cost] present_avg_ms=...` (both paths) as separate lines, plus
+a new `[native-cost] native_avg_ms=...` line (fast path only, replacing
+what used to be separately-timed blowup-cost + blit-cost, since this
+path fuses those two steps into one).
+
+Verified under DOSBox-X (which negotiates a real 32bpp mode, so this
+DOES exercise the new fast path for real, just not the specific 3-byte-
+write case): colors render correctly (no channel-swap corruption),
+confirmed across two in-game blowup-factor transitions (pressed B
+twice, screenshotted each) -- no corruption, no leftover pixels, same
+clean letterbox behavior as every prior patch in this series.
+FLIPDBG.LOG confirms the fast path is active (`[native-cost]` lines
+present) at ~11-25ms/frame, comparable to the old blowup+blit combined
+cost on this host. Clean boot/play/ESCAPE-quit, no hang. Real-hardware
+confirmation on the 486DX2-50 -- fps number, FLIPDBG.LOG (does the
+native-cost path activate for the real 24bpp Mach64 format, and does it
+actually beat the old blit cost there), and explicit visual-corruption
+scrutiny given this is the riskiest change in the whole investigation
+(direct writes into the actual VRAM-bound surface, in a format-
+sensitive way, on hardware this port can't locally emulate for this
+specific bpp) -- is the essential next step before trusting this
+result.
+---
+ gameSource/blowUp.cpp |  92 +++++++++++++++++-
+ gameSource/blowUp.h   |  17 ++++
+ gameSource/game.cpp   | 219 +++++++++++++++++++++++++++++++++---------
+ 3 files changed, 284 insertions(+), 44 deletions(-)
+
+diff --git a/gameSource/blowUp.cpp b/gameSource/blowUp.cpp
+index dd8365c..7564e7e 100644
+--- a/gameSource/blowUp.cpp
++++ b/gameSource/blowUp.cpp
+@@ -80,5 +80,95 @@ void blowupOntoScreen( Uint32 *inImage, int inWidth, int inHeight,
+             }
+ 
+         }
+-            
++
++    }
++
++
++
++// DOS-PORT: real-hardware measurement (486DX2-50) found the flip path
++// (this blowup + a separate SDL_BlitSurface format-conversion pass) the
++// single largest per-frame cost in this whole port's fps investigation --
++// the blit alone measured ~145-160ms/frame before its own rect-limiting
++// fix (patch 0013), and still ~25-37ms/frame afterward. The blit exists
++// because the game always renders into a fixed XRGB8888 renderSurface
++// first (patch 0003) -- necessary because raw Uint32 writes assuming
++// 32bpp XRGB corrupted real Mach64 hardware, which only offers banked
++// 24bpp, not 32bpp. But the actual problem there was writing an
++// UNVERIFIED format, not writing the real format -- this function packs
++// each pixel into whatever format the destination surface actually
++// negotiated (via SDL_MapSurfaceRGB, which reads the surface's own
++// SDL_PixelFormatDetails), eliminating the separate blit-conversion pass
++// entirely for any 2/3/4-bytes-per-pixel format. See flipGameImageOnto-
++// Screen() in game.cpp for the capability check and the (unmodified,
++// still real-hardware-verified) blowupOntoScreen()+blit fallback for any
++// format this doesn't support.
++void blowupOntoScreenNative( Uint32 *inImage, int inWidth, int inHeight,
++                             int inBlowFactor, SDL_Surface *inScreen ) {
++
++    const SDL_PixelFormatDetails *destFormat =
++        SDL_GetPixelFormatDetails( inScreen->format );
++    int bytesPerPixel = destFormat->bytes_per_pixel;
++
++    int newWidth = inBlowFactor * inWidth;
++    int newHeight = inBlowFactor * inHeight;
++
++    int yOffset = ( inScreen->h - newHeight ) / 2;
++    int xOffset = ( inScreen->w - newWidth ) / 2;
++
++    // pitch is already in bytes -- unlike blowupOntoScreen above, we
++    // don't convert it to a pixel count, since bytesPerPixel isn't
++    // necessarily 4 here.
++    int pitch = inScreen->pitch;
++
++    Uint8 *pixels = (Uint8 *)( inScreen->pixels );
++
++    // same reused-scratch-buffer pattern as blowupOntoScreen above, sized
++    // in bytes rather than Uint32s since bytesPerPixel varies.
++    static Uint8 *screenRowBuf = NULL;
++    static int screenRowBufCapacity = 0;
++    int neededBytes = newWidth * bytesPerPixel;
++    if( neededBytes > screenRowBufCapacity ) {
++        delete [] screenRowBuf;
++        screenRowBuf = new Uint8[ neededBytes ];
++        screenRowBufCapacity = neededBytes;
++        }
++
++    for( int y=0; y<inHeight; y++ ) {
++
++        for( int x=0; x<inWidth; x++ ) {
++
++            Uint32 pixelValue = inImage[ y * inWidth + x ];
++
++            Uint8 r = (Uint8)( ( pixelValue >> 16 ) & 0xFF );
++            Uint8 g = (Uint8)( ( pixelValue >> 8 ) & 0xFF );
++            Uint8 b = (Uint8)( pixelValue & 0xFF );
++
++            // packed is a Uint32 regardless of bytesPerPixel -- only its
++            // low bytesPerPixel bytes are meaningful, and on this
++            // x86/little-endian target those low bytes are exactly the
++            // ones a real N-bytes-per-pixel write would produce (SDL's
++            // own SDL_FillSurfaceRect3 uses the identical low-byte-first
++            // convention for 24bpp, confirmed by reading SDL_fillrect.c).
++            Uint32 packed = SDL_MapSurfaceRGB( inScreen, r, g, b );
++
++            int boxXStart = inBlowFactor * x;
++
++            Uint8 *rowDest = screenRowBuf + boxXStart * bytesPerPixel;
++            for( int i=0; i<inBlowFactor; i++ ) {
++                memcpy( rowDest, &packed, bytesPerPixel );
++                rowDest += bytesPerPixel;
++                }
++            }
++
++        int destRowStart =
++            ( yOffset + y * inBlowFactor ) * pitch + xOffset * bytesPerPixel;
++
++        Uint8 *destRow = pixels + destRowStart;
++        for( int i=0; i<inBlowFactor; i++ ) {
++            memcpy( destRow, screenRowBuf, newWidth * bytesPerPixel );
++            destRow += pitch;
++            }
++
++        }
++
+     }
+diff --git a/gameSource/blowUp.h b/gameSource/blowUp.h
+index 530a6e4..0d1ec09 100644
+--- a/gameSource/blowUp.h
++++ b/gameSource/blowUp.h
+@@ -8,3 +8,20 @@
+  */
+ void blowupOntoScreen( Uint32 *inImage, int inWidth, int inHeight,
+                        int inBlowFactor, SDL_Surface *inScreen );
++
++
++
++/**
++ * DOS-PORT: like blowupOntoScreen, but packs each pixel into inScreen's
++ * OWN native pixel format and writes it there directly -- no intermediate
++ * fixed-format surface, no separate blit-conversion pass afterward.
++ *
++ * inImage is assumed packed as 0x00RRGGBB (matching gameImage's existing
++ * format elsewhere in this port). Only supports destination formats with
++ * 2, 3, or 4 bytes per pixel (i.e. not an indexed/paletted mode) -- caller
++ * must check this first (e.g. via SDL_GetPixelFormatDetails) and fall back
++ * to blowupOntoScreen + a blit for anything else. Caller is responsible
++ * for locking inScreen first if SDL_MUSTLOCK(inScreen) is true.
++ */
++void blowupOntoScreenNative( Uint32 *inImage, int inWidth, int inHeight,
++                             int inBlowFactor, SDL_Surface *inScreen );
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 7db0c44..71c6918 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -257,7 +257,66 @@ SDL_Surface *renderSurface = NULL;
+ 
+ 
+ 
+-// flips back buffer onto screen (or updates rect)
++// DOS-PORT: present the given sub-rect (or the whole screen, if
++// inFullUpdate) from window->surface to the real VRAM framebuffer.
++// Factored out of flipScreen() so both the renderSurface+blit fallback
++// path AND the native-format fast path (see flipGameImageOntoScreen,
++// below) share identical present behavior and timing -- the present
++// step's job (flush window->surface->pixels to VRAM) is the same either
++// way, regardless of how those pixels got populated.
++void presentScreen( SDL_Surface *inScreen, SDL_Rect *inRect,
++                    char inFullUpdate ) {
++#ifdef __DJGPP__
++    double presentStartTime = Time::getCurrentTime();
++#endif
++
++    // DOS-PORT: SDL_UpdateWindowSurface() always builds an implicit
++    // FULL-window rect (see SDL_video.c) and hands it to the DOS
++    // backend's own DOSVESA_UpdateWindowFramebuffer, which copies the
++    // WHOLE VRAM framebuffer whenever it sees a rect list that covers the
++    // full window (_dos_port_is_full_fb_rect_list) -- real-hardware
++    // measurement (present_avg_ms, ~48-55ms, matching the backend's own
++    // known ~50ms/flush figure) showed this happening every frame. The
++    // backend already supports genuine per-rect VRAM copies when handed a
++    // sub-window rect list (SDL_dosframebuffer.c's per-rect copy loop) --
++    // SDL_UpdateWindowSurfaceRects() is the public API that reaches it.
++    if( inFullUpdate ) {
++        SDL_UpdateWindowSurface( window );
++        }
++    else {
++        SDL_UpdateWindowSurfaceRects( window, inRect, 1 );
++        }
++
++#ifdef __DJGPP__
++    {
++        double presentElapsed = Time::getCurrentTime() - presentStartTime;
++        static double presentElapsedTotal = 0;
++        static int presentFrameCount = 0;
++        presentElapsedTotal += presentElapsed;
++        presentFrameCount ++;
++        if( presentFrameCount >= 20 ) {
++            FILE *flipLog = fopen( "FLIPDBG.LOG", "a" );
++            if( flipLog != NULL ) {
++                fprintf( flipLog,
++                         "[present-cost n=%d] present_avg_ms=%f\n",
++                         presentFrameCount,
++                         1000.0 * presentElapsedTotal / presentFrameCount );
++                fclose( flipLog );
++                }
++            presentElapsedTotal = 0;
++            presentFrameCount = 0;
++            }
++        }
++#endif
++    }
++
++
++
++// flips back buffer onto screen via the renderSurface + blit path --
++// the fallback used only when the real window surface's pixel format
++// isn't one blowupOntoScreenNative can pack into directly (see
++// flipGameImageOntoScreen). Unmodified in behavior from before patch
++// 0018 -- still the real-hardware-verified path for that case.
+ void flipScreen( SDL_Surface *inScreen ) {
+ 
+     // unlock the render surface if necessary
+@@ -311,61 +370,33 @@ void flipScreen( SDL_Surface *inScreen ) {
+         SDL_BlitSurface( renderSurface, &srcRect, inScreen, &dstRect );
+         }
+ 
+-#ifdef __DJGPP__
+-    double blitElapsed = Time::getCurrentTime() - blitStartTime;
+-    double presentStartTime = Time::getCurrentTime();
+-#endif
+-
+-    // DOS-PORT: same reasoning as the blit above, one layer down --
+-    // SDL_UpdateWindowSurface() always builds an implicit full-window rect
+-    // (see SDL_video.c) and hands it to the DOS backend's own
+-    // DOSVESA_UpdateWindowFramebuffer, which copies the WHOLE VRAM
+-    // framebuffer whenever it sees a rect list that covers the full
+-    // window (_dos_port_is_full_fb_rect_list) -- real-hardware measurement
+-    // (present_avg_ms, ~48-55ms, matching the backend's own known
+-    // ~50ms/flush figure) showed this is exactly what was happening every
+-    // frame, independent of the blit fix above. The backend already
+-    // supports genuine per-rect VRAM copies when handed a sub-window rect
+-    // list (SDL_dosframebuffer.c's per-rect copy loop) -- SDL_Update-
+-    // WindowSurfaceRects() is the public API that reaches it. Use the same
+-    // sub-rect as the blit above on a normal frame; fall back to a full
+-    // update only on the one frame where blowUpChanged just cleared the
+-    // whole surface (border may have changed size that frame, same as
+-    // the blit's own fallback above). Fresh rect, not a reuse of the
+-    // (already blit-consumed, possibly clipped) dstRect above.
+-    if( blowUpChanged ) {
+-        SDL_UpdateWindowSurface( window );
+-        }
+-    else {
+-        SDL_Rect presentRect = srcRect;
+-        SDL_UpdateWindowSurfaceRects( window, &presentRect, 1 );
+-        }
+-
+ #ifdef __DJGPP__
+     {
+-        double presentElapsed = Time::getCurrentTime() - presentStartTime;
++        double blitElapsed = Time::getCurrentTime() - blitStartTime;
+         static double blitElapsedTotal = 0;
+-        static double presentElapsedTotal = 0;
+-        static int flipFrameCount = 0;
++        static int blitFrameCount = 0;
+         blitElapsedTotal += blitElapsed;
+-        presentElapsedTotal += presentElapsed;
+-        flipFrameCount ++;
+-        if( flipFrameCount >= 20 ) {
++        blitFrameCount ++;
++        if( blitFrameCount >= 20 ) {
+             FILE *flipLog = fopen( "FLIPDBG.LOG", "a" );
+             if( flipLog != NULL ) {
+                 fprintf( flipLog,
+-                         "[flip-cost n=%d] blit_avg_ms=%f present_avg_ms=%f\n",
+-                         flipFrameCount,
+-                         1000.0 * blitElapsedTotal / flipFrameCount,
+-                         1000.0 * presentElapsedTotal / flipFrameCount );
++                         "[blit-cost n=%d] blit_avg_ms=%f\n",
++                         blitFrameCount,
++                         1000.0 * blitElapsedTotal / blitFrameCount );
+                 fclose( flipLog );
+                 }
+             blitElapsedTotal = 0;
+-            presentElapsedTotal = 0;
+-            flipFrameCount = 0;
++            blitFrameCount = 0;
+             }
+         }
+ #endif
++
++    // dstRect may have been clipped in place by SDL_BlitSurface -- use
++    // the still-original srcRect (never handed to BlitSurface as a
++    // mutable dstrect) for the present step instead.
++    SDL_Rect presentRect = srcRect;
++    presentScreen( inScreen, &presentRect, blowUpChanged );
+     }
+ 
+ 
+@@ -382,8 +413,110 @@ void lockScreen( SDL_Surface * inScreen ) {
+ 
+ 
+ 
++// DOS-PORT: cached once at first flip -- whether the real window
++// surface's pixel format is one blowupOntoScreenNative (blowUp.cpp) can
++// pack into directly. -1 = not yet determined, 0 = unsupported (use the
++// renderSurface + blit fallback below), 1 = supported (skip
++// renderSurface + blit entirely). The format is fixed for the life of a
++// run (createScreen() only runs once on this DOS-only-fullscreen port),
++// so this never needs to be re-checked after the first flip.
++int nativeFastPathSupported = -1;
++
++
++
+ void flipGameImageOntoScreen( SDL_Surface *inScreen ) {
+ 
++    if( nativeFastPathSupported == -1 ) {
++        // DOS-PORT: real-hardware measurement found flip (blowup + blit +
++        // present) the single largest per-frame cost remaining after
++        // patches 0015/0016 fixed the render loop (~56ms, edging out the
++        // render loop's own ~46ms) -- its largest component is the
++        // blit's format-conversion pass. The renderSurface + blit design
++        // (patch 0003) exists because raw Uint32 writes assuming 32bpp
++        // XRGB corrupted real Mach64 hardware, which only offers banked
++        // 24bpp -- not because writing in the real format is unsafe,
++        // only because the ORIGINAL pre-DOS-port code never checked what
++        // that format was. This checks properly, once, and only takes
++        // the fast path for a destination format blowupOntoScreenNative
++        // actually supports (2/3/4 bytes/pixel -- not an indexed/
++        // paletted mode, which would need a different, quality-changing
++        // nearest-color approach this investigation isn't trying to
++        // solve). Anything else falls back to the exact prior (already
++        // real-hardware-verified) renderSurface + blit path.
++        const SDL_PixelFormatDetails *destFormat =
++            SDL_GetPixelFormatDetails( inScreen->format );
++        int bpp = ( destFormat != NULL ) ? destFormat->bytes_per_pixel : 0;
++        nativeFastPathSupported =
++            ( bpp == 2 || bpp == 3 || bpp == 4 ) ? 1 : 0;
++        }
++
++    if( nativeFastPathSupported ) {
++
++        char screenLocked = false;
++        if( SDL_MUSTLOCK( inScreen ) ) {
++            screenLocked = SDL_LockSurface( inScreen );
++            }
++
++        if( blowUpChanged ) {
++            // raw 0 is black in any packed RGB format (no channel bias
++            // to account for), same as the fallback path's own
++            // full-clear.
++            SDL_FillSurfaceRect( inScreen, NULL, 0 );
++            }
++
++#ifdef __DJGPP__
++        // TEMPORARY DIAGNOSTIC (FLIPDBG.LOG): this fast path fuses what
++        // used to be two separately-timed steps (blowup + blit) into
++        // one -- logged under its own tag so it isn't confused with the
++        // fallback path's separate blowup-cost/blit-cost lines.
++        double nativeStartTime = Time::getCurrentTime();
++#endif
++
++        blowupOntoScreenNative( gameImage,
++                                width, totalImageHeight, blowUpFactor,
++                                inScreen );
++
++#ifdef __DJGPP__
++        {
++            double nativeElapsed = Time::getCurrentTime() - nativeStartTime;
++            static double nativeElapsedTotal = 0;
++            static int nativeFrameCount = 0;
++            nativeElapsedTotal += nativeElapsed;
++            nativeFrameCount ++;
++            if( nativeFrameCount >= 20 ) {
++                FILE *flipLog = fopen( "FLIPDBG.LOG", "a" );
++                if( flipLog != NULL ) {
++                    fprintf( flipLog,
++                             "[native-cost n=%d] native_avg_ms=%f\n",
++                             nativeFrameCount,
++                             1000.0 * nativeElapsedTotal / nativeFrameCount );
++                    fclose( flipLog );
++                    }
++                nativeElapsedTotal = 0;
++                nativeFrameCount = 0;
++                }
++            }
++#endif
++
++        if( screenLocked ) {
++            SDL_UnlockSurface( inScreen );
++            }
++
++        SDL_Rect presentRect;
++        presentRect.w = blowUpFactor * width;
++        presentRect.h = blowUpFactor * totalImageHeight;
++        presentRect.x = ( inScreen->w - presentRect.w ) / 2;
++        presentRect.y = ( inScreen->h - presentRect.h ) / 2;
++
++        presentScreen( inScreen, &presentRect, blowUpChanged );
++
++        // we've handled any blow up change
++        blowUpChanged = false;
++        return;
++        }
++
++    // Fallback: exact prior behavior, for any destination format the
++    // fast path above doesn't support.
+     lockScreen( inScreen );
+     if( blowUpChanged ) {
+         SDL_FillSurfaceRect( renderSurface, NULL, 0x00000000 );
+-- 
+2.47.3
+

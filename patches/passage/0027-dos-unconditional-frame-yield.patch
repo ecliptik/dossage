@@ -1,0 +1,99 @@
+From 447e12e227d63de49fd461c071e9cca774345ad1 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Sun, 30 Aug 2026 18:34:59 -0700
+Subject: [PATCH] dos: unconditionally yield once per frame via SDL_Delay(0)
+
+The frame limiter (patch 0006/afc7239) only called SDL_Delay when
+extraTime > 0 -- i.e. only when the frame finished under the 15fps
+budget with time to spare. On a 486DX2-66 + S3 ViRGE real-hardware
+rig, this game's own measured fps during actual gameplay (12.41-
+13.25, across every video-mode config tested) never clears that
+budget, so extraTime is negative on every single frame and the
+SDL_Delay call was never reached at all during real gameplay on
+that class of machine -- the main loop never yielded once.
+
+This backend's cooperative thread model (setjmp/longjmp-based, see
+the existing DOS-PORT comment just above this change) depends on
+SDL_Delay's DOS_Yield() hook to give other cooperative 'threads' --
+notably the audio mixer -- any CPU time at all. Thread::staticSleep
+does not do this (raw usleep, bypasses SDL entirely); only SDL_Delay
+does. A zero-length SDL_Delay(0) still triggers a real DOS_Yield()
+context-switch, independent of whether the frame pacer itself needs
+to sleep for any nonzero duration.
+
+Sibling DOS port doskutsu's Renderer::flip() calls SDL_Delay(0)
+unconditionally on every flip, with no guard, for exactly this
+reason, and has been validated clean across dozens of sustained
+real-hardware sessions on this same card model. This patch brings
+dossage's own per-frame yield in line with that precedent: the
+existing real-sleep behavior when extraTime > 0 is unchanged, but
+the else branch now calls SDL_Delay(0) instead of skipping the call
+entirely, so the cooperative scheduler gets a chance to run the
+audio thread on every frame regardless of how loaded the frame was.
+
+This is being investigated as a candidate contributor to a video-
+corruption symptom observed on real hardware during sustained
+gameplay (see PLAN.md's Phase 0/2 write-up) -- a starved cooperative
+scheduler is a plausible mechanism for state that only goes wrong
+under sustained real-time load, though it is not yet confirmed as
+the corruption's root cause. This patch is a minimal, narrowly
+scoped change to restore the yield; it does not otherwise restructure
+the frame-pacing loop.
+---
+ gameSource/game.cpp | 37 +++++++++++++++++++++++++++++--------
+ 1 file changed, 29 insertions(+), 8 deletions(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index a32c478..06dca89 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -1491,17 +1491,38 @@ char playGame() {
+         
+         double extraTime = 1.0 / lockedFrameRate - frameTime;
+         
++        // DOS-PORT: SDL_Delay, not Thread::staticSleep -- on DOS,
++        // Thread::staticSleep is a raw usleep() that bypasses SDL
++        // entirely (see ThreadDOS.cpp). This backend's cooperative
++        // audio-thread scheduler only gets CPU time via SDL_Delay
++        // (its DOS_Yield hook); without this, the audio device opens
++        // fine but PlayDevice/WaitDevice never run at all, and
++        // nothing pushed into the ring is ever mixed or played,
++        // regardless of what the audio callback computes.
++        //
++        // DOS-PORT: this call must happen every frame, unconditionally,
++        // not just when extraTime > 0. On slower real hardware (e.g. a
++        // 486DX2-66), sustained frameTime already exceeds the 15fps
++        // budget on every single frame, so extraTime is always negative
++        // and a guarded-only call (the prior form of this code) meant
++        // the loop never yielded at all during real gameplay on that
++        // class of machine -- SDL_Delay(0) still triggers this backend's
++        // DOS_Yield() cooperative context-switch even at a zero-length
++        // sleep, which is what the audio-thread scheduler above actually
++        // depends on, independent of how long (if at all) the frame
++        // pacer needs to sleep. This matches sibling DOS port doskutsu's
++        // Renderer::flip(), which calls SDL_Delay(0) unconditionally on
++        // every flip for the same reason. Confirmed by real-hardware
++        // testing on a 486DX2-66 + S3 ViRGE rig: with the guarded-only
++        // call, that machine's own measured fps (12.41-13.25) never
++        // clears the 15fps budget, so extraTime was negative on every
++        // frame and SDL_Delay was never reached during gameplay at all.
+         if( extraTime > 0 ) {
+-            // DOS-PORT: SDL_Delay, not Thread::staticSleep -- on DOS,
+-            // Thread::staticSleep is a raw usleep() that bypasses SDL
+-            // entirely (see ThreadDOS.cpp). This backend's cooperative
+-            // audio-thread scheduler only gets CPU time via SDL_Delay
+-            // (its DOS_Yield hook); without this, the audio device opens
+-            // fine but PlayDevice/WaitDevice never run at all, and
+-            // nothing pushed into the ring is ever mixed or played,
+-            // regardless of what the audio callback computes.
+             SDL_Delay( (Uint32)( extraTime * 1000 ) );
+             }
++        else {
++            SDL_Delay( 0 );
++            }
+ 
+         // start timing next frame
+         lastFrameTimeStamp = Time::getCurrentTime();
+-- 
+2.47.3
+

@@ -1,0 +1,95 @@
+From 998c97fb90c8244f3c904d26b8e53499f24c082e Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 14:59:27 -0700
+Subject: [PATCH] dos: limit the VRAM present to the same sub-rect as the blit
+
+Real 486DX2-50 confirmation of patch 0013 (rect-limited blit) landed:
+3.02 -> 4.59 fps (~52% improvement), blit_avg_ms dropped ~5x
+(~145-160ms -> ~25-37ms) as predicted. But present_avg_ms (the actual
+VRAM write, SDL_UpdateWindowSurface -> the SDL3-DOS backend's own
+DOSVESA_UpdateWindowFramebuffer) stayed flat at ~45-55ms, unaffected by
+the blit fix -- expected, since it's a separate call downstream of the
+blit, but now the largest single remaining named cost (running total:
+blowup ~11.6ms + blit ~29.4ms + present ~50.4ms = ~91.4ms this round,
+plus render loop ~70ms and pump ~29ms from earlier unrevised
+measurements = ~190ms, against a real ~218ms frame time -- accounts for
+essentially all of it, only ~28ms of slack for misc per-frame logic).
+
+Same root cause, one layer down: `SDL_UpdateWindowSurface()` always
+builds an implicit full-window rect (see vendor/SDL's SDL_video.c) and
+hands it to the DOS backend's `DOSVESA_UpdateWindowFramebuffer`, which
+copies the WHOLE VRAM framebuffer whenever the rect list it's handed
+covers the full window (`_dos_port_is_full_fb_rect_list`,
+SDL_dosframebuffer.c) -- exactly what was happening every frame,
+completely independent of how little the blit fix left changed.
+Confirmed by reading the shared SDL3-DOS backend source directly (not
+guessed): it already supports genuine per-rect VRAM copies when handed
+a sub-window rect list (a real per-rect copy loop exists in
+SDL_dosframebuffer.c, distinct from the full-framebuffer fast path) --
+`SDL_UpdateWindowSurfaceRects()` is the public API that reaches it, no
+shared-backend changes needed for this fix, just calling the API that
+was already there.
+
+Fix: same sub-rect the blit already computes (`srcRect`), passed to
+`SDL_UpdateWindowSurfaceRects(window, &presentRect, 1)` on a normal
+frame; the original unconditional `SDL_UpdateWindowSurface()` full
+update kept only for the one frame where `blowUpChanged` just cleared
+the whole surface (same fallback condition as the blit fix, same
+reasoning -- the border may have changed size that frame). Uses a
+fresh `SDL_Rect` rather than reusing the blit's own `dstRect`, since
+that one was already handed to (and potentially clipped by)
+`SDL_BlitSurface`.
+
+Verified under DOSBox-X: builds; visually confirmed clean rendering
+across two frames of normal scrolling gameplay and two more
+blowup-factor changes (pressed B twice) -- no tearing, no corruption,
+no stale pixels left over in the letterbox border on either transition.
+This is the riskiest change in the investigation so far (touches the
+actual hardware-write path, not just an intermediate software surface),
+so the visual check was deliberately more thorough than prior patches
+in this series. Clean boot/play/ESCAPE-quit, no hang. Real-hardware
+confirmation on the 486DX2-50 (fps number plus a repeat FLIPDBG.LOG
+capture) is the next step.
+---
+ gameSource/game.cpp | 25 ++++++++++++++++++++++++-
+ 1 file changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index d7503d7..40ffcef 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -316,7 +316,30 @@ void flipScreen( SDL_Surface *inScreen ) {
+     double presentStartTime = Time::getCurrentTime();
+ #endif
+ 
+-    SDL_UpdateWindowSurface( window );
++    // DOS-PORT: same reasoning as the blit above, one layer down --
++    // SDL_UpdateWindowSurface() always builds an implicit full-window rect
++    // (see SDL_video.c) and hands it to the DOS backend's own
++    // DOSVESA_UpdateWindowFramebuffer, which copies the WHOLE VRAM
++    // framebuffer whenever it sees a rect list that covers the full
++    // window (_dos_port_is_full_fb_rect_list) -- real-hardware measurement
++    // (present_avg_ms, ~48-55ms, matching the backend's own known
++    // ~50ms/flush figure) showed this is exactly what was happening every
++    // frame, independent of the blit fix above. The backend already
++    // supports genuine per-rect VRAM copies when handed a sub-window rect
++    // list (SDL_dosframebuffer.c's per-rect copy loop) -- SDL_Update-
++    // WindowSurfaceRects() is the public API that reaches it. Use the same
++    // sub-rect as the blit above on a normal frame; fall back to a full
++    // update only on the one frame where blowUpChanged just cleared the
++    // whole surface (border may have changed size that frame, same as
++    // the blit's own fallback above). Fresh rect, not a reuse of the
++    // (already blit-consumed, possibly clipped) dstRect above.
++    if( blowUpChanged ) {
++        SDL_UpdateWindowSurface( window );
++        }
++    else {
++        SDL_Rect presentRect = srcRect;
++        SDL_UpdateWindowSurfaceRects( window, &presentRect, 1 );
++        }
+ 
+ #ifdef __DJGPP__
+     {
+-- 
+2.47.3
+

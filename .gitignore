@@ -62,6 +62,7 @@ venv/
 # public-facing summary.
 /CLAUDE.md
 /PLAN.md
+/PLAN-archive-*.md
 /TODO.md
 
 # Runtime test artifacts

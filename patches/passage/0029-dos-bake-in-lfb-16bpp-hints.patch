@@ -1,0 +1,77 @@
+From 23d55aeafa8ec063ff6fcf977cba8d52c2fe3c1e Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Mon, 31 Aug 2026 00:36:18 -0700
+Subject: [PATCH] dos: bake in LFB + 16bpp hints, matching doskutsu's own
+ defaults
+
+Real-hardware investigation (2026-08-30/31, 486DX2-66 + S3 ViRGE, see
+docs/PLAN.md's "Phase 0/2 result") found this port ran banked/32bpp by
+default, unlike doskutsu, which unconditionally forces LFB
+(nxengine-evo patch 0045) and caps color depth at 16bpp (patch 0041)
+on every DOS build. Matching that config here fixed an intermittent
+launch-time video-corruption bug (a zero-settle-delay bank-switch race
+in the shared backend that LFB sidesteps entirely) and measured a real
+fps improvement (13.25fps vs. 12.4-12.7fps at 32bpp, same rig) from
+halving per-pixel data volume.
+
+Tonight's testing used manual SET SDL_DOS_PREFER_LFB=1 / SET
+SDL_DOS_MAX_BPP=16 before every run; this bakes the same config into
+the port itself via SDL_SetHintWithPriority (SDL_HINT_OVERRIDE),
+unconditionally, matching doskutsu's own call site and priority.
+
+Not yet real-hardware-confirmed safe on Mach64 or Cirrus. Expected to
+be a no-op on both (Mach64 has no LFB silicon at all; Cirrus already
+auto-disables LFB at the shared layer regardless of what a port
+requests, SDL/0019+0020) -- but the MAX_BPP=16 cap genuinely changes
+what VESA mode Mach64 negotiates (previously 640x480 24bpp banked,
+closest-match fallback since no 320x240 exists on that chip) to an
+untested 640x480-16bpp-or-lower alternative. Needs real-hardware
+verification on both cards before this is fully trusted there.
+---
+ gameSource/game.cpp | 30 ++++++++++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 2051c4d..18737f0 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -642,6 +642,36 @@ int mainFunction( int inArgCount, char **inArgs ) {
+     // confirmation of the boot log's negotiated mode does. Set
+     // regardless since it's a no-op when not needed.
+     SDL_SetHint( SDL_HINT_DOS_PIN_WINDOW_TO_NATIVE_MODE, "1" );
++
++    // DOS-PORT: force LFB and cap color depth at 16bpp, matching sibling
++    // port doskutsu's own unconditional hints (nxengine-evo patches
++    // 0045/0041) on every card, every DOS build. Found via real-hardware
++    // investigation (2026-08-30/31, see docs/PLAN.md's "Phase 0/2
++    // result") on a 486DX2-66 + S3 ViRGE rig: this port previously ran
++    // banked/32bpp by default (unlike doskutsu), which produced an
++    // intermittent launch-time video-corruption bug (zero-settle-delay
++    // bank-switch race in the shared backend, `SDL_dosframebuffer.c`) --
++    // forcing LFB avoids that bank-switched write path entirely. The
++    // 16bpp cap is a real, measured fps win on top (13.25fps vs.
++    // 12.4-12.7fps at 32bpp, same rig) by halving per-pixel data volume.
++    // A separate, still-unexplained runtime video-corruption symptom on
++    // that same rig turned out to be an audio/DMA interaction, not a
++    // video-mode issue -- these hints alone did not fix it; see
++    // docs/PLAN.md for the full chain. Set unconditionally like
++    // doskutsu's own hints: on Mach64 (no LFB silicon at all) and Cirrus
++    // (LFB auto-disabled by a separate shared-layer fix, SDL/0019/0020,
++    // regardless of what this hint requests) `SDL_HINT_DOS_PREFER_LFB`
++    // is expected to be a safe no-op -- NOT yet real-hardware-confirmed
++    // on either card as of this patch; the `SDL_HINT_DOS_MAX_BPP=16` cap
++    // in particular changes what VESA mode Mach64 negotiates (previously
++    // 640x480 24bpp banked, closest-match since no 320x240 exists on
++    // that chip) to an untested 640x480 16bpp-or-lower alternative --
++    // needs real-hardware verification on Mach64/Cirrus before this
++    // hint pair can be trusted there the way it now is on ViRGE.
++    SDL_SetHintWithPriority( SDL_HINT_DOS_PREFER_LFB, "1",
++                              SDL_HINT_OVERRIDE );
++    SDL_SetHintWithPriority( SDL_HINT_DOS_MAX_BPP, "16",
++                              SDL_HINT_OVERRIDE );
+ #endif
+ 
+     // DOS-PORT: SDL3 removed SDL_INIT_NOPARACHUTE (no signal-handler
+-- 
+2.47.3
+
