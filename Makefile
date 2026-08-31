@@ -13,6 +13,11 @@ HUB_DIR   := $(REPO_ROOT)/.sdl-dos-ports
 
 include $(HUB_DIR)/shared/build/sdl3-dos.mk
 
+# Standalone DJGPP diagnostic probes (tests/probes/*.c) -- separate build
+# target, no SDL/engine dependency. See tests/probes/probes.mk and
+# tests/probes/README.md.
+include $(REPO_ROOT)/tests/probes/probes.mk
+
 .PHONY: all
 all: sdl3 game
 
