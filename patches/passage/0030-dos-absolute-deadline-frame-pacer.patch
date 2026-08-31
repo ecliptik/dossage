@@ -1,0 +1,427 @@
+From 39423854cf34eef77ee4b08279dff2f0863700b8 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Mon, 31 Aug 2026 16:44:14 -0700
+Subject: [PATCH] dos: absolute-deadline frame pacer
+
+Passage's stock frame limiter is open-loop on a per-frame delta: it
+measures frameTime, computes 1/lockedFrameRate - frameTime, sleeps that,
+and discards the result. Nothing ever references an absolute timeline, so
+every per-frame error is a permanent, unrecoverable loss.
+
+That cost real fps on a 486DX2-66. The port was NOT compute-bound --
+measured per-frame work is ~42.7ms against a 66.67ms budget, ~24ms/frame
+of idle slack -- yet it measured 13.99fps. The gap was entirely pacing.
+
+Root cause, confirmed three independent ways: SDL_SYS_DelayNS calls
+DJGPP's delay(1) whenever >1ms remains, that call actually takes ~1.236ms
+(measured on this hardware by tests/probes/dlygran.c), and the loop can
+only re-check its exit condition BETWEEN calls -- so every sleep lands up
+to a full quantum late. Instrumentation put the pacer 1.21ms past its
+deadline every frame, against the 1.148ms/frame the fps gap works out to.
+
+This replaces it with an absolute deadline that advances by exactly one
+tick per frame, so whatever a frame overspends the next repays:
+
+- Converge on the deadline rather than commit to one sleep (doskutsu's
+  loop-pacer pattern): halve the remainder and re-measure, since no single
+  sleep can land accurately.
+- Final approach via SDL_Delay(0) -- pure DOS_Yield, ~0.25ms granularity,
+  5x finer than delay(1)'s quantum -- exiting at half a quantum so the
+  landing is symmetric about the deadline rather than always late. A
+  busy-wait was tried here and REVERTED: it starved the BIOS timer, and
+  because Passage's own fps report divides by time(NULL), the reported
+  number IMPROVED while the real rate collapsed.
+- Debt clamp at 5 ticks, matching doskutsu's MAX_CATCHUP. Resyncs FORGIVE
+  debt, and forgiven time can never be earned back under a hard cap.
+- Every delta signed with a sanity ceiling: uclock() is not monotonic on
+  real DOS hardware (~1 corrupt sample per 1800 frames, measured).
+- The audio pump may spend the pacer's idle slack on ring refills instead
+  of sleeping through it, bounded three ways so it cannot become the
+  unbounded burst patch 0008 was written to prevent.
+
+Real hardware, 486DX2-66 + Cirrus CL-GD5434: 13.992 -> 14.936fps, with
+steady-state at 14.9989fps against the 15.000fps hard ceiling
+lockedFrameRate=15 imposes. Remaining gap is 3-4 discrete stall frames
+per run, under separate investigation.
+
+Deliberately NOT included: a shortened deadline to compensate for those
+stalls. It was tried and reverted -- steady-state duly rose to 15.089fps,
+but tightening the deadline also converts more frames into missed frames,
+stall cost more than doubled, and the run average did not move. You
+cannot compensate your way past stalls by tightening the target.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ gameSource/game.cpp | 324 +++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 323 insertions(+), 1 deletion(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 18737f0..3a56a49 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -946,7 +946,80 @@ char playGame() {
+     
+ 
+     double lastFrameTimeStamp = Time::getCurrentTime();
+-    
++
++#ifdef __DJGPP__
++    // DOS-PORT: absolute-deadline frame pacer state. See the pacer itself,
++    // below, for why the stock delta pacer cannot hit 15fps on this
++    // hardware no matter how accurate the sleep underneath it is.
++    //
++    // Paced entirely in SDL's own timebase (SDL_GetTicksNS), never
++    // minorGems' Time::getCurrentTime() -- that is a separate,
++    // millisecond-truncated gettimeofday() clock, and mixing the two is
++    // its own error source independent of the pacer's shape. Sibling port
++    // doskutsu paces exclusively through SDL's timer API for the same
++    // reason.
++    // The pacer targets exactly 1/lockedFrameRate. A deliberately-shortened
++    // deadline was tried on real hardware and REVERTED -- recorded here
++    // because the result is counterintuitive and someone will otherwise try
++    // it again.
++    //
++    // The reasoning was sound and the mechanism worked exactly as intended:
++    // lockedFrameRate=15 makes 15.000fps an unreachable ceiling (the deadline
++    // advances one tick per frame, so a stalled frame is a permanent loss no
++    // later frame may repay), so shortening the target by the measured mean
++    // excess (0.293ms/frame across two clean A/B runs) should have landed the
++    // average on 15. With a 0.40ms compensation, steady-state duly rose from
++    // 14.9989fps to **15.089fps** -- above 15, precisely as predicted, with
++    // the pacer still landing on the shortened deadline to within 0.03ms.
++    //
++    // The run average did not move: 14.936 -> 14.942fps. Because tightening
++    // the deadline ALSO converts more frames into missed frames, and every
++    // miss is a loss. Stall cost more than doubled, 0.279 -> 0.654 ms/frame
++    // (w1 behind_repay 44->54; w7's worst single frame 350-380ms -> 528ms),
++    // consuming exactly what the compensation bought.
++    //
++    // The lesson, which generalises past this port: **you cannot compensate
++    // your way past stalls by tightening the target.** Stalls are the binding
++    // constraint; squeezing the budget just manufactures more of them. Fix
++    // the stalls or accept the average. A knob that buys +0.006fps -- deep
++    // inside run-to-run noise -- while making the underlying behaviour worse
++    // has no business in the tree, however good its rationale looked.
++    const Uint64 dosFrameTickNS = (Uint64)( SDL_NS_PER_SECOND / lockedFrameRate );
++
++    // Resync rather than sprint if we ever fall this far behind. doskutsu's
++    // own catch-up history (its patches 0281/0282/0286/0288) is a series of
++    // real incidents where an unclamped backlog manufactured work that
++    // should not have existed -- once from an unsigned-subtraction
++    // wraparound that turned a small delta into "tens of days". dossage
++    // cannot manufacture ticks (one loop iteration IS one world step here,
++    // dX += timeDelta), so the failure mode is instead a visible speed-up
++    // as the pacer stops sleeping to repay impossible debt. Either way the
++    // clamp is not optional: the known ~57ms first-flush stall alone would
++    // otherwise be repaid as a sprint.
++    // 5 ticks, matching doskutsu's own MAX_CATCHUP. This was 2, and that was
++    // too tight: real-hardware PACEDBG shows 4 resync events inside a single
++    // 300-frame window (plus 8 more during startup), and a resync FORGIVES
++    // the outstanding debt -- that time is permanently lost, and since
++    // lockedFrameRate=15 makes 15.000fps a hard ceiling the game may approach
++    // but never exceed, forgiven time can never be earned back. Every such
++    // event pushes the measured average further below 15 for the rest of the
++    // run.
++    //
++    // Why a larger clamp is safe HERE, where doskutsu needed the guard:
++    // doskutsu's catch-up loop manufactures simulation ticks, so an inflated
++    // backlog creates work that should not exist -- that is the spiral its
++    // patches 0281/0282/0286/0288 were written against. dossage cannot do
++    // that. One loop iteration IS one world step (dX += timeDelta), so
++    // "catching up" here only means not sleeping: the frame runs at its
++    // natural ~42.7ms against a 66.67ms budget, i.e. ~24ms/frame of repayment
++    // capacity. 5 ticks (333ms) of debt is therefore repayable in ~14 frames
++    // of ordinary running, bounded and self-limiting, with the clamp still
++    // there to stop an unbounded sprint if work ever genuinely exceeds budget.
++    const Uint64 dosFrameMaxDebtNS = 5 * dosFrameTickNS;
++
++    Uint64 dosNextFrameDeadlineNS = SDL_GetTicksNS() + dosFrameTickNS;
++#endif
++
+     // use to slow player motion after spouse has died
+     char movingThisFrame = true;
+     
+@@ -1075,6 +1148,7 @@ char playGame() {
+ 
+ 
+     while( !done ) {
++
+         
+         if( getKeyDown( SDL_SCANCODE_S ) ) {
+             stepDX = false;
+@@ -1398,11 +1472,67 @@ char playGame() {
+             // DOS-PORT: pump-loop-cost timing (was here through patch
+             // 0026) served its purpose -- see presentScreen()'s own
+             // comment above for why it's removed now.
++#ifdef __DJGPP__
++            // DOS-PORT: spend the frame limiter's own idle slack on refilling
++            // the audio ring, instead of sleeping through it.
++            //
++            // Patch 0008 capped this loop at 4 iterations because an
++            // unbounded catch-up burst once cost a catastrophic 2fps, and
++            // that cap must stay as a floor. But 4 is far too few during a
++            // ring REFILL: real-hardware PACEDBG data (2720-frame run) shows
++            // two ~300-frame windows where per-frame work jumps from ~42.7ms
++            // to 52-58ms with 31-33 frames going over budget -- window 1
++            // (t=0-20s, the initial fill) and window 7 (t=122-142s). SONG.WAV
++            // is a 136-second loop, so window 7 is the loop restart. Those two
++            // windows alone cost ~0.91ms/frame averaged across the whole run,
++            // which is 10x the pacer's own residual and the single largest
++            // remaining term in the fps number.
++            //
++            // The fix uses what this whole investigation turned up: the game
++            // does ~42.7ms of work against a 66.67ms budget, so there is
++            // ~24ms/frame of slack the pacer was about to sleep away. Pump
++            // while the ring is short AND the deadline is still comfortably
++            // ahead, so a refill burst lands in idle time instead of pushing
++            // frames over budget. The deadline is the honest budget here --
++            // the loop cannot run long without the pacer noticing, because it
++            // is checking the very clock the pacer paces on.
++            //
++            // Bounded three ways, deliberately: the 0008 cap still applies
++            // unconditionally for the first 4 iterations, extra iterations
++            // require real measured slack, and a hard ceiling matches the
++            // backend's own >32-calls runaway guard (SDL/0067) so this can
++            // never become the unbounded burst 0008 was written to prevent.
++            const int pumpHardCap = 32;
++            const Sint64 pumpSlackMarginNS = 8000000;   // 8ms of headroom
++
++            while( pumpIters < pumpHardCap &&
++                   SDL_DOSAudioRingFillMs() < pumpClampedTargetMs ) {
++
++                if( pumpIters >= pumpMaxIters ) {
++                    // Past the 0008 cap: only continue on measured slack.
++                    const Sint64 pumpLeftNS =
++                        (Sint64)dosNextFrameDeadlineNS - (Sint64)SDL_GetTicksNS();
++                    if( pumpLeftNS < pumpSlackMarginNS ) {
++                        break;
++                        }
++                    // Wraparound guard, same rule as the pacer below.
++                    if( pumpLeftNS > (Sint64)dosFrameTickNS ) {
++                        break;
++                        }
++                    }
++
++                if( !SDL_DOSAudioPump() ) {
++                    break;
++                    }
++                pumpIters ++;
++                }
++#else
+             while( pumpIters < pumpMaxIters &&
+                    SDL_DOSAudioRingFillMs() < pumpClampedTargetMs &&
+                    SDL_DOSAudioPump() ) {
+                 pumpIters ++;
+                 }
++#endif
+             }
+ #endif
+ 
+@@ -1440,12 +1570,204 @@ char playGame() {
+         // call, that machine's own measured fps (12.41-13.25) never
+         // clears the 15fps budget, so extraTime was negative on every
+         // frame and SDL_Delay was never reached during gameplay at all.
++#ifdef __DJGPP__
++        // DOS-PORT: absolute-deadline frame pacer, replacing the stock
++        // per-frame delta sleep above (extraTime is left computed because
++        // nothing else here should change shape; it is simply not what we
++        // sleep on).
++        //
++        // WHY: the stock pacer is open-loop. It measures frameTime,
++        // computes 1/15 - frameTime, sleeps that, and discards the result.
++        // Nothing ever references an absolute timeline, so every per-frame
++        // error is a permanent, unrecoverable loss. Three real-hardware
++        // rounds on a 486DX2-66 measured those losses directly (see
++        // docs/PLAN.md's "15fps plan"): ~1.0ms/frame of sleep overshoot,
++        // ~2.8ms/frame of over-requested target (frameTime and the sleep
++        // request are BOTH truncated to whole milliseconds -- by
++        // TimeDOS.cpp's tv_usec/1000 and by (Uint32)(extraTime*1000)
++        // respectively -- on a machine whose clock is good to ~0.84us),
++        // and ~0.85ms/frame amortized from a one-time startup stall.
++        // Together ~4.65ms/frame against the 4.83ms/frame actually
++        // missing: essentially the entire gap between the measured
++        // 13.99fps and the 15fps target.
++        //
++        // Critically, this is NOT a performance problem. The same round
++        // measured real per-frame game work at only ~42.5ms against the
++        // 66.67ms budget -- ~24ms/frame of idle slack. The machine is not
++        // struggling; the pacer is leaking. (Sibling port doskutsu, a far
++        // heavier engine, clears 15fps on this identical hardware.)
++        //
++        // An absolute deadline fixes all three losses at once without
++        // needing to know their causes: whatever a frame overspends is
++        // repaid by the next frame sleeping correspondingly less, so no
++        // single sleep's precision matters. That is why the earlier
++        // -3ms fixed-compensation experiment failed (13.84fps, within
++        // noise) -- a constant offset cannot correct a variable error.
++        {
++            const Uint64 nowNS = SDL_GetTicksNS();
++
++
++            // Signed delta deliberately: an unsigned wraparound here is a
++            // real, real-hardware-confirmed hazard on this backend, not a
++            // theoretical one -- uclock() (SDL's DOS timebase) is not
++            // monotonic, and the SDL/0137 diagnostic caught it live at
++            // roughly 1 sample per 1800 frames. doskutsu's own patch 0288
++            // was the same class of bug: an unsigned subtraction turned a
++            // small delta into "tens of days" and blew through every
++            // downstream guard. Treat anything implausible as a lost
++            // measurement and resync rather than trust it.
++            const Sint64 remainingNS = (Sint64)dosNextFrameDeadlineNS - (Sint64)nowNS;
++
++            if( remainingNS > (Sint64)dosFrameTickNS ) {
++                // Ahead by more than a whole frame: the clock lied (or the
++                // deadline is stale). Resync; never sleep on a bad reading.
++                dosNextFrameDeadlineNS = nowNS + dosFrameTickNS;
++                SDL_Delay( 0 );
++                }
++            else if( remainingNS > 0 ) {
++                // Converge on the deadline rather than commit to one sleep.
++                //
++                // The first version of this pacer slept the whole remainder
++                // in a single SDL_DelayNS and trusted the additive deadline
++                // to repay any overshoot on the following frame. On real
++                // hardware that recovered most of the gap (13.99 -> 14.73fps)
++                // but left ~0.53ms/frame on the table: the sleep lands ~1.1ms
++                // past the deadline every frame, and repayment measurably did
++                // not keep up with it.
++                //
++                // doskutsu's loop pacer solves this by sleeping only HALF the
++                // estimated remainder and re-measuring against the real clock
++                // each pass, so it approaches the deadline instead of
++                // overshooting it once and correcting afterwards. Each pass
++                // costs one more DOS_Yield() (~0.25ms measured, and it feeds
++                // the cooperative audio scheduler, so the calls are not
++                // wasted), and dossage has ~24ms/frame of slack to spend on
++                // them.
++                //
++                // Sub-millisecond resolution throughout: SDL_DelayNS routes
++                // straight to this backend's SDL_SYS_DelayNS with no
++                // truncation to whole milliseconds, and still runs the
++                // DOS_Yield() the audio thread depends on (see the SDL_Delay
++                // note above -- that requirement is unchanged).
++                Sint64 leftNS = remainingNS;
++
++                // Hand off from sleeping to spinning while there is still
++                // more than one sleep-quantum of room left.
++                //
++                // WHY THIS THRESHOLD IS NOT SMALL: SDL_SYS_DelayNS cannot
++                // land accurately no matter what it is asked for. Its inner
++                // loop calls DJGPP's delay(1) whenever >1ms remains, that
++                // call really takes ~1.236ms (measured on this hardware by
++                // tests/probes/dlygran.c), and the loop can only re-check
++                // its exit condition BETWEEN calls -- so any sleep can
++                // finish up to roughly one full quantum past what was asked.
++                // Halving does not fix this: the last halving still ends
++                // with a sleep, and that sleep still overshoots. Measured
++                // directly (PACEDBG.LOG, 300-frame window): a 6-iteration
++                // convergence loop with a 0.25ms floor still exited an
++                // average of 1.178ms PAST the deadline, against the
++                // 1.148ms/frame the real-hardware fps gap works out to.
++                // That is the whole remaining gap, and it is why neither
++                // the additive deadline nor the halving recovered it.
++                const Sint64 dosFrameSpinHandoffNS = 3000000;   // 3ms
++
++                while( leftNS > dosFrameSpinHandoffNS ) {
++                    SDL_DelayNS( (Uint64)( leftNS / 2 ) );
++
++                    const Uint64 afterNS = SDL_GetTicksNS();
++                    leftNS = (Sint64)dosNextFrameDeadlineNS - (Sint64)afterNS;
++
++                    // Same wraparound guard as above: a bad clock reading
++                    // must never turn into a long sleep or a spin.
++                    if( leftNS > (Sint64)dosFrameTickNS ) {
++                        break;
++                        }
++                    }
++
++                // Final approach: SDL_Delay(0) in a loop -- a pure
++                // DOS_Yield() with no delay(1) anywhere near it.
++                //
++                // A previous revision of this block busy-waited on the clock
++                // instead, on the reasoning that a sub-3ms non-yielding gap
++                // was nothing against the ~150ms audio ring depth. That was
++                // wrong, and real hardware punished it twice over:
++                //   1. It starved the BIOS timer interrupt. time(NULL)
++                //      advanced only 41s across a ~90s run -- 54% of ticks
++                //      simply lost -- which also made the engine's own fps
++                //      report meaningless, since netTime is time(NULL)-based.
++                //   2. Per-frame work GREW ~15.7ms (42.8 -> 58.5ms, read off
++                //      entry_err). Not yielding starves the cooperative audio
++                //      scheduler, so SDL_DOSAudioPump() has far more to do
++                //      every frame. 3ms/frame of withheld yield is ~45ms of
++                //      every second, not a rounding error.
++                // Real fps was ~6.5, not the 14.3 the broken report claimed.
++                // Recorded here because the mistake is not obvious from the
++                // code and the fps number actively lied about it.
++                //
++                // SDL_Delay(0) takes SDL_SYS_DelayNS's ns==0 early return,
++                // which is DOS_Yield() and nothing else: ~0.25ms granularity
++                // (measured), 5x finer than delay(1)'s ~1.236ms quantum,
++                // while still feeding the audio thread and letting interrupts
++                // run.
++                //
++                // Exit at HALF a quantum rather than at zero, so the landing
++                // is symmetric about the deadline -- sometimes a hair early,
++                // sometimes a hair late, averaging out -- instead of always
++                // overshooting. Stopping at zero would put the mean landing a
++                // full half-quantum late again, which is the same shape of
++                // bug in a smaller size.
++                // Tuned against real hardware, not assumed. At 0.125ms (half
++                // the measured ~0.25ms DOS_Yield quantum) the landing came in
++                // at exit_err +0.053..+0.092ms across five clean steady-state
++                // windows -- consistently a hair LATE, where DOSBox had shown
++                // it a hair early. The real quantum here is evidently a little
++                // coarser than DOSBox's, so exit half of the measured residual
++                // earlier to centre the landing on the deadline rather than
++                // just past it. Small, but it is a systematic bias applied to
++                // every frame, and the whole gap being chased is ~1ms.
++                const Sint64 dosFrameYieldHalfQuantumNS = 200000;   // 0.2ms
++
++                while( leftNS > dosFrameYieldHalfQuantumNS ) {
++                    SDL_Delay( 0 );
++
++                    const Uint64 afterNS = SDL_GetTicksNS();
++                    leftNS = (Sint64)dosNextFrameDeadlineNS - (Sint64)afterNS;
++
++                    // Wraparound guard, same rule as everywhere else here.
++                    if( leftNS > (Sint64)dosFrameTickNS ) {
++                        break;
++                        }
++                    }
++
++                dosNextFrameDeadlineNS += dosFrameTickNS;
++                }
++            else if( -remainingNS > (Sint64)dosFrameMaxDebtNS ) {
++                // Too far behind to repay honestly. Resync instead of
++                // sprinting: dossage cannot manufacture world steps to
++                // catch up (one loop iteration IS one step, dX +=
++                // timeDelta), so repaying a large debt would show up as a
++                // visible speed-up rather than dropped frames. The known
++                // ~57ms first-flush stall lands here exactly once per run.
++                dosNextFrameDeadlineNS = nowNS + dosFrameTickNS;
++                SDL_Delay( 0 );
++                }
++            else {
++                // Behind, but within the repayable window: skip the sleep
++                // and let the deadline advance normally, so the next frame
++                // naturally sleeps less and the timeline recovers.
++                dosNextFrameDeadlineNS += dosFrameTickNS;
++                SDL_Delay( 0 );
++                }
++
++            }
++#else
+         if( extraTime > 0 ) {
+             SDL_Delay( (Uint32)( extraTime * 1000 ) );
+             }
+         else {
+             SDL_Delay( 0 );
+             }
++#endif
+ 
+         // start timing next frame
+         lastFrameTimeStamp = Time::getCurrentTime();
+-- 
+2.47.3
+

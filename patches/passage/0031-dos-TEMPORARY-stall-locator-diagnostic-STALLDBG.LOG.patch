@@ -1,0 +1,143 @@
+From 00f75d433c79f13332c7eeb9d11f54b981e3b9c5 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Mon, 31 Aug 2026 16:53:43 -0700
+Subject: [PATCH] dos: TEMPORARY stall-locator diagnostic (STALLDBG.LOG)
+
+REMOVAL IS PLANNED, NOT OPTIONAL: this patch exists to answer one open
+question and must be reverted once it has. It is landed separately from
+the pacer fix (0030) precisely so it can be removed without touching
+anything load-bearing -- per the hub convention that a temporary
+diagnostic patch needs its removal planned at landing time rather than
+left as an unscheduled follow-up.
+
+WHY: the port sits at 14.936fps against a hard 15.000fps ceiling
+(lockedFrameRate=15 makes the pacer's deadline exactly 66.6667ms, so the
+average can approach but never exceed it). Steady-state is already
+14.9989fps with the pacer landing on its deadline within microseconds.
+The entire remaining shortfall is 3-4 discrete stall frames per run, at
+FIXED frame positions, reproducible regardless of player input.
+
+An earlier revision of this diagnostic timed render+flip and the audio
+pump, and produced a sharp negative: 16 stall lines, ALL inside frames
+0-21 (startup), and NOTHING at the mid-run stall around frames
+1800-2100 -- even though the pacer's own instrumentation confirmed that
+stall occurred on the same run (~333ms). Since the detector was verified
+to fire, that silence is evidence: the startup stall and the mid-run
+stall are NOT the same bug, and the mid-run one spends its ~330ms
+outside the render/flip/pump span entirely.
+
+WHAT: adds a tail_ms field covering the only remaining span -- the loop
+tail between the frame pacer and the end of the loop body (game logic,
+movement, aging, chest checks, event polling). Logs on either a slow
+work span (>100ms) or a slow tail (>50ms).
+
+Costs a normal frame five clock reads and NO file I/O; it writes only
+when a frame is anomalously slow, which is a handful of lines per run.
+That restraint is deliberate -- unconditional per-frame logging was
+measured at 0.70ms/frame (SDL/0136) and ~0.4-0.5fps (patch 0028), enough
+to swamp the effect being measured.
+
+Detector verified to fire before use, both revisions: thresholds
+lowered, well-formed output confirmed, thresholds restored, rebuilt. A
+silent detector and a broken one are indistinguishable, and this one is
+specifically being used to interpret a silence.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ gameSource/game.cpp | 52 ++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 51 insertions(+), 1 deletion(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 3a56a49..652dd84 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -1149,7 +1149,23 @@ char playGame() {
+ 
+     while( !done ) {
+ 
+-        
++#ifdef __DJGPP__
++        // TEMPORARY DIAGNOSTIC (STALLDBG.LOG): locate the w7-class stall.
++        //
++        // A previous round instrumented render+flip+pump and produced a
++        // sharp result: 16 stall lines, ALL inside frames 0-21 (the startup
++        // window), and NOTHING at w7 -- even though PACEDBG confirmed w7's
++        // usual ~333ms stall happened on that same run. The detector was
++        // proven to fire, so that silence is evidence rather than absence:
++        // whatever costs w7 its ~330ms is NOT in the render/flip/pump span.
++        //
++        // This extends coverage to the only remaining span -- the loop tail
++        // (game logic, movement, aging, chest checks, event polling) between
++        // the pacer and the end of the loop body. Logs on EITHER a slow work
++        // span or a slow tail, so whichever one w7 lives in, it surfaces.
++        const Uint64 stallT0 = SDL_GetTicksNS();
++#endif
++
+         if( getKeyDown( SDL_SCANCODE_S ) ) {
+             stepDX = false;
+             }
+@@ -1399,6 +1415,9 @@ char playGame() {
+         
+         flipGameImageOntoScreen( screen );
+ 
++#ifdef __DJGPP__
++        const Uint64 stallT1 = SDL_GetTicksNS();   // end render+flip
++#endif
+ 
+ #ifdef __DJGPP__
+         // DOS-PORT: top up the audio ring explicitly once per frame,
+@@ -1537,6 +1556,10 @@ char playGame() {
+ #endif
+ 
+ 
++#ifdef __DJGPP__
++        const Uint64 stallT2 = SDL_GetTicksNS();   // end audio pump
++#endif
++
+         // done with frame
+         double newTimestamp = Time::getCurrentTime();
+         
+@@ -1772,6 +1795,10 @@ char playGame() {
+         // start timing next frame
+         lastFrameTimeStamp = Time::getCurrentTime();
+ 
++#ifdef __DJGPP__
++        const Uint64 stallT3 = SDL_GetTicksNS();   // pacer done; tail begins
++#endif
++
+ 
+         // DOS-PORT: rest-of-loop-cost timing (was here through patch
+         // 0026) served its purpose -- see presentScreen()'s own comment
+@@ -2106,6 +2133,29 @@ char playGame() {
+             maxExploreScore = exploreScore;
+             }
+ 
++#ifdef __DJGPP__
++        {
++            const Uint64 stallT4 = SDL_GetTicksNS();
++            const double workMs = (double)( stallT2 - stallT0 ) / 1000000.0;
++            const double tailMs = (double)( stallT4 - stallT3 ) / 1000000.0;
++
++            if( ( workMs > 100.0 || tailMs > 50.0 ) &&
++                workMs < 10000.0 && tailMs < 10000.0 ) {
++                FILE *sf = fopen( "STALLDBG.LOG", "ab" );
++                if( sf != NULL ) {
++                    fprintf( sf,
++                             "[stall] frame=%d work_ms=%f render_flip_ms=%f "
++                             "pump_ms=%f tail_ms=%f\n",
++                             frameCount, workMs,
++                             (double)( stallT1 - stallT0 ) / 1000000.0,
++                             (double)( stallT2 - stallT1 ) / 1000000.0,
++                             tailMs );
++                    fclose( sf );
++                    }
++                }
++            }
++#endif
++
+         }
+ 
+     unsigned long netTime = time( NULL ) - startTime;
+-- 
+2.47.3
+
