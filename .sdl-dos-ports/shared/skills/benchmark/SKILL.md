@@ -98,6 +98,13 @@ detail) -- non-negotiable, not just good practice when convenient:
   run procedure it had already learned once. Write the operational
   how-to-run-it down somewhere durable (a rig runbook in the port's own
   docs), not just in a session's accumulated conversational context.
+  **The concrete remedy, not just a mitigation**: install vcctrl's own
+  skills into the port repo (`npx skills add <vcctrl-repo> --full-depth
+  --all`, alongside this hub's -- see `shared/skills/README.md`). Rig
+  operating knowledge (hazards, MCP sequencing, common workflows) then
+  lives in the repo itself, not only in whichever session happened to
+  learn it that night -- surviving a `/clear` by construction rather than
+  by discipline.
 
 If you find you've mischaracterized something mid-campaign, correct the
 record immediately and explicitly, including your own prior commits -- a

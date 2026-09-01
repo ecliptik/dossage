@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# apply-patches.sh -- apply patches/<name>/*.patch to vendor/<name>/.
+# apply-patches.sh -- apply patches/<name>/*.patch (then patches/<name>-local/*.patch)
+# to vendor/<name>/.
 #
 # Patches are produced by `git format-patch` from a working branch in the
 # vendor tree and numbered lexically (0001-, 0002-, ...). Ordering matters;
@@ -10,8 +11,26 @@
 #      (not PIN_ME), `git reset --hard` the vendor tree to that SHA
 #      (discarding any prior patches, so this is idempotent).
 #   2. Apply every `patches/<name>/*.patch` in lexical order via `git am`.
-#   3. If a patch fails to apply, abort the `git am` cleanly, print the
+#   3. If `patches/<name>-local/` exists, apply its *.patch files next, in
+#      the same lexical order, on top of the series from step 2 -- see
+#      "Local overlay" below.
+#   4. If a patch fails to apply, abort the `git am` cleanly, print the
 #      failing path, and exit non-zero.
+#
+# Local overlay (patches/<name>-local/): for a temporary, single-
+# investigation diagnostic or workaround that only one port wants --
+# never a shared/-numbered slot for something that isn't a reusable
+# platform fix or reusable diagnostic tooling the NEXT investigation
+# would also want. This is not a new pattern: a port's own
+# patches/<engine>/ has always worked this way for engine-shaped
+# patches; patches/<name>-local/ is the same idea for a *shared* vendor
+# (SDL, SDL_mixer) a port doesn't own outright. Own independent NNNN
+# numbering, unrelated to the shared series' numbers. Never symlinked
+# from shared/ (unlike patches/<name>/ for a shared vendor) -- it's a
+# real, port-owned directory, tracked in the port's own repo, gitignored
+# nowhere. See docs/patch-conventions.md for the reusable-fix vs.
+# disposable-instrumentation criterion this exists to make structural
+# rather than a review-time judgment call.
 #
 # SAFETY: step 1's `git reset --hard` is destructive to anything sitting
 # uncommitted in that vendor tree -- including hours of real investigation
@@ -82,11 +101,62 @@ if command -v flock >/dev/null 2>&1; then
     fi
 fi
 
+# apply_patch_dir -- collect *.patch from $2 (LC_ALL=C lexical order) and
+# `git am` them against the vendor tree at $1. $3 is a human label for log
+# lines ("shared series" / "local overlay"). Returns 0 with nothing to do
+# if the directory doesn't exist or is empty -- that's the normal case for
+# patches/<name>-local/ on a port that has never needed one.
+apply_patch_dir() {
+    local vendor_path="$1"
+    local patches_path="$2"
+    local label="$3"
+    local name="$4"
+
+    if [[ ! -d "$patches_path" ]]; then
+        log "$name: no $patches_path -- nothing to apply ($label)"
+        return 0
+    fi
+
+    # LC_ALL=C forces ASCII byte-order sort. Without it, glibc's default
+    # locale-aware collation treats `-` (0x2D) as punctuation that gets
+    # promoted next to alphabetics -- so a filename like `0014a-...patch`
+    # would sort BEFORE `0014-...patch` on en_US.UTF-8 even though ASCII
+    # byte order has the reverse (0x2D < 0x61). Caught by nxengine during
+    # Phase 5 attempt 4 when sdl-engine's `0014a` and `0010a` follow-up
+    # patches both surfaced the bug. Renumbering those files to pure-
+    # numeric slots (0020, 0021) sidestepped the immediate apply-order
+    # problem; this LC_ALL=C export makes the durable fix so any future
+    # contributor can use any naming scheme without locale-fragility.
+    local patches=()
+    while IFS= read -r -d '' p; do
+        patches+=("$p")
+    done < <(find -L "$patches_path" -maxdepth 1 -name '*.patch' -type f -print0 | LC_ALL=C sort -z)
+
+    if [[ "${#patches[@]}" -eq 0 ]]; then
+        log "$name: no *.patch files in $patches_path -- nothing to apply ($label)"
+        return 0
+    fi
+
+    log "$name: applying ${#patches[@]} patch(es) ($label)"
+    # git am reads From: headers etc.; git format-patch output is its native input.
+    # Pass patches explicitly rather than via stdin so error messages reference
+    # the failing file path.
+    if ! (cd "$vendor_path" && git am --keep-cr "${patches[@]}"); then
+        log "$name: git am failed ($label) -- last patch left conflicts in $vendor_path"
+        log "       Inspect with: (cd $vendor_path && git status)"
+        log "       Abort with:   (cd $vendor_path && git am --abort)"
+        return 1
+    fi
+
+    log "$name: $label applied cleanly"
+}
+
 apply_one() {
     local name="$1"
     local sha="$2"
     local vendor_path="$VENDOR_DIR/$name"
     local patches_path="$PATCHES_DIR/$name"
+    local local_patches_path="$PATCHES_DIR/${name}-local"
 
     if [[ ! -d "$vendor_path" ]]; then
         log "$name: vendor tree not present -- run scripts/fetch-sources.sh first"
@@ -117,45 +187,18 @@ apply_one() {
         (cd "$vendor_path" && git am --abort) 2>/dev/null || true
     fi
 
-    if [[ ! -d "$patches_path" ]]; then
-        log "$name: no patches/ directory -- nothing to apply"
-        return 0
-    fi
-
-    # Collect .patch files in lexical order. If none, that's fine.
-    #
-    # LC_ALL=C forces ASCII byte-order sort. Without it, glibc's default
-    # locale-aware collation treats `-` (0x2D) as punctuation that gets
-    # promoted next to alphabetics -- so a filename like `0014a-...patch`
-    # would sort BEFORE `0014-...patch` on en_US.UTF-8 even though ASCII
-    # byte order has the reverse (0x2D < 0x61). Caught by nxengine during
-    # Phase 5 attempt 4 when sdl-engine's `0014a` and `0010a` follow-up
-    # patches both surfaced the bug. Renumbering those files to pure-
-    # numeric slots (0020, 0021) sidestepped the immediate apply-order
-    # problem; this LC_ALL=C export makes the durable fix so any future
-    # contributor can use any naming scheme without locale-fragility.
-    local patches=()
-    while IFS= read -r -d '' p; do
-        patches+=("$p")
-    done < <(find -L "$patches_path" -maxdepth 1 -name '*.patch' -type f -print0 | LC_ALL=C sort -z)
-
-    if [[ "${#patches[@]}" -eq 0 ]]; then
-        log "$name: no *.patch files in $patches_path -- nothing to apply"
-        return 0
-    fi
-
-    log "$name: applying ${#patches[@]} patch(es)"
-    # git am reads From: headers etc.; git format-patch output is its native input.
-    # Pass patches explicitly rather than via stdin so error messages reference
-    # the failing file path.
-    if ! (cd "$vendor_path" && git am --keep-cr "${patches[@]}"); then
-        log "$name: git am failed -- last patch left conflicts in $vendor_path"
-        log "       Inspect with: (cd $vendor_path && git status)"
-        log "       Abort with:   (cd $vendor_path && git am --abort)"
+    if ! apply_patch_dir "$vendor_path" "$patches_path" "shared series" "$name"; then
         return 1
     fi
 
-    log "$name: all patches applied cleanly"
+    # Local overlay, applied on top of the shared series against the SAME
+    # tree -- never resets between the two, so a local patch can assume
+    # the shared series' end state exactly like a shared patch assumes the
+    # slot before it. Absent entirely is the normal case; see the header
+    # comment above.
+    if ! apply_patch_dir "$vendor_path" "$local_patches_path" "local overlay" "$name"; then
+        return 1
+    fi
 }
 
 # Walk the manifest
