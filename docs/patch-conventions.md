@@ -24,6 +24,48 @@ patches/<vendor>/NNNN-short-description.patch
   Don't bundle an unrelated fix into a patch whose subject describes
   something else.
 
+## Shared series vs. a port-local overlay: the actual decision, not "which file does it touch"
+
+A patch for a *shared* vendor (SDL, SDL_mixer) has two possible homes,
+and the fault line between them is **reusable-fix vs. disposable-
+instrumentation, never which subsystem the patch happens to touch**:
+
+- **`shared/patches/<vendor>/`** (this hub's own numbered series, symlinked
+  into every port as `patches/<vendor>/`): a genuine platform fix (a
+  chip/hardware quirk any port could hit), or diagnostic tooling worth
+  keeping hint-gated for the *next* investigation, not just this one.
+- **A port's own `patches/<vendor>-local/`** (real, port-owned, never
+  symlinked, own independent `NNNN` numbering unrelated to the shared
+  series): a temporary, single-investigation diagnostic or workaround
+  that only this port needs. Applied by `apply-patches.sh` *after* the
+  shared series, against the same vendor tree -- see that script's own
+  header comment for the mechanics.
+
+**Ask "would the next investigation on a different port want this?", not
+"is this a diagnostic?" and not "which file does it touch."** Both wrong
+questions fail on real boundary cases from this hub's own history:
+
+- A patch touching a genuinely shared file (the timer backend, say) is
+  still local-overlay material if it only exists to answer one port's
+  one question -- a real instance of exactly this shipped in the shared
+  series by mistake, cost every port pinning past it a measured per-frame
+  tax, and needed a whole second patch just to remove. "Which file does
+  it touch" would not have caught this; the file was legitimately shared
+  platform code.
+- A set of diagnostic probes built during one chip's investigation
+  (bank-switch chunk-content/readback, CRTC-register dumps, VBE
+  scan-line-length checks) correctly stayed in the shared series, hint-
+  gated and zero-cost when unset, specifically because they're reusable
+  chip-agnostic tooling the next real-hardware-only video symptom would
+  also want -- "is this a diagnostic?" would have wrongly sent these
+  local.
+
+If you're not sure which side a patch is on, default to local-overlay:
+it costs nothing to promote a proven-reusable local patch into the
+shared series later (a real `git format-patch`, reviewed, given the next
+free shared slot), and it's much cheaper than removing a mistakenly-
+shared one after other ports have already pinned past it.
+
 ## Commit / patch subject
 
 Prefix the subject with a bracketed tag identifying what layer the patch
@@ -191,6 +233,15 @@ peer-authored patch in `shared/patches/`:
   in the same series had avoided.
 
 ## A temporary diagnostic patch needs its removal planned at landing time
+
+**This section's own real instance is now the canonical example of why
+"shared series vs. local overlay" (above) exists — read that section
+first if you're deciding where a new diagnostic should land.** What
+follows describes what actually had to happen because a genuinely
+single-port diagnostic landed in the shared series instead of a local
+overlay; a port on this convention going forward has `patches/<vendor>-
+local/` for exactly this case, and the mistake described below shouldn't
+recur.
 
 A diagnostic patch landed in `shared/` — gated or not, cheap or not —
 becomes a permanent, silent tax on every port that pins past it the
