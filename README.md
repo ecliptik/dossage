@@ -81,8 +81,23 @@ From a clean clone to a playable DOS build.
 ```bash
 git clone https://forgejo.ecliptik.com/ecliptik/dossage.git
 cd dossage
-git submodule update --init --recursive   # the shared SDL3-DOS platform layer
 ```
+
+That's the whole checkout step. The shared SDL3-DOS platform layer lives at
+`.sdl-dos-ports/` and is vendored into this repository as a **git subtree**,
+so it arrives with the clone -- there is no submodule to initialise.
+
+To pull later hub changes into it:
+
+```bash
+git subtree pull --prefix=.sdl-dos-ports \
+  https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git main --squash
+```
+
+Each such commit records the exact upstream hub SHA in its own message
+(`Squashed '.sdl-dos-ports/' content from commit <sha>`), which is what makes
+"this binary came from this patch series" checkable -- the same guarantee a
+submodule pin gave, in plain text rather than a gitlink.
 
 ### 2. Make the DJGPP toolchain visible
 

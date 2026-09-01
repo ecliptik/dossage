@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "skills": {
+    "benchmark": {
+      "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
+      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
+      "sourceType": "git",
+      "skillPath": "shared/skills/benchmark/SKILL.md",
+      "computedHash": "2ece717381caa1c94cabf6233d3e1164694464bb7472e294bf5d9fade874a8b0"
+    },
+    "dos-emulator-workflow": {
+      "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
+      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
+      "sourceType": "git",
+      "skillPath": "shared/skills/dos-emulator-workflow/SKILL.md",
+      "computedHash": "8ae396b25945e24207266cc9aff57c3d0a7dc202195711b71589856cdcb40e13"
+    },
+    "dos-hardware-validation": {
+      "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
+      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
+      "sourceType": "git",
+      "skillPath": "shared/skills/dos-hardware-validation/SKILL.md",
+      "computedHash": "3d293265ae1dcb4e57d736b6b0b056f6b3b851b0cc88858893d12f1033290843"
+    },
+    "dos-realhw-verification": {
+      "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
+      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
+      "sourceType": "git",
+      "skillPath": "shared/skills/dos-realhw-verification/SKILL.md",
+      "computedHash": "d926db45fb93c4542bccd3f45c335f7765c9d653191344a84eeabdcadefae3aa"
+    },
+    "dos-rig-operations": {
+      "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
+      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
+      "sourceType": "git",
+      "skillPath": "shared/skills/dos-rig-operations/SKILL.md",
+      "computedHash": "21b0e889678aa2dac5bdabcd1a09f45940a302794390506663703960b5efd95d"
+    },
+    "port": {
+      "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
+      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
+      "sourceType": "git",
+      "skillPath": ".claude/skills/port/SKILL.md",
+      "computedHash": "0a28f5c68eb6667c1a0485f05755b6a855dba37fc740c1a59eee581c552865b3"
+    },
+    "review": {
+      "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
+      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
+      "sourceType": "git",
+      "skillPath": "shared/skills/review/SKILL.md",
+      "computedHash": "f20cb5b9d7f15446307be0cb1d79a10b51a15f07fd35b7efb1a8489a1ce7e35a"
+    },
+    "vcctrl-camera": {
+      "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "sourceType": "git",
+      "skillPath": ".agents/skills/vcctrl-camera/SKILL.md",
+      "computedHash": "b06b2451371971d1b0b999db7697303b9ed50810fb61d5728831c1f55354df62"
+    },
+    "vcctrl-common-workflows": {
+      "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "sourceType": "git",
+      "skillPath": ".agents/skills/vcctrl-common-workflows/SKILL.md",
+      "computedHash": "8690f473e796262800b29ebbee023a23ac01cb7408f78920aed87e06caee2e21"
+    },
+    "vcctrl-dinspect-sysinfo": {
+      "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "sourceType": "git",
+      "skillPath": ".agents/skills/vcctrl-dinspect-sysinfo/SKILL.md",
+      "computedHash": "ea4845a5e2dc7b86aecece231a45fc1ffdeca5b853ce64fe279f8c160dca4f1d"
+    },
+    "vcctrl-mcp-workflows": {
+      "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "sourceType": "git",
+      "skillPath": ".agents/skills/vcctrl-mcp-workflows/SKILL.md",
+      "computedHash": "f91c51e6b392ea53c3e8101b6ee232c5f18318149e1c919bfc2000b76dbdd7f1"
+    },
+    "vcctrl-repo-conventions": {
+      "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "sourceType": "git",
+      "skillPath": ".agents/skills/vcctrl-repo-conventions/SKILL.md",
+      "computedHash": "7226efdb32689a3dcb07c1ecfb9883408f5258717ab4448158289d77269b6aba"
+    },
+    "vcctrl-rig-hazards": {
+      "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "sourceType": "git",
+      "skillPath": ".agents/skills/vcctrl-rig-hazards/SKILL.md",
+      "computedHash": "35a7a3f396a97f7fb33226c16dc8e2966e5206497a3db77970e61d9508a0f6cf"
+    },
+    "vcctrl-webkvm-copy": {
+      "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "sourceType": "git",
+      "skillPath": ".agents/skills/vcctrl-webkvm-copy/SKILL.md",
+      "computedHash": "0c13c84174d46c40e15ff2568eae914371fe46406292bb77ecc37e40ba5b922f"
+    }
+  }
+}
