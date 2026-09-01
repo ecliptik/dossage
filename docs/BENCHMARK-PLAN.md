@@ -127,6 +127,11 @@ round-trip costs a fixed tax regardless of scope.
    Never assume the rig is what it was last time.
 3. **Stage** the whole `build/stage/` tree to a fresh directory. Hash-verify
    before staging *and* after sending. Clear stale logs first -- they append.
+   Confirm `patches/*-local/` is empty before the build that gets staged --
+   an overlay applies unconditionally, and a forgotten diagnostic there
+   costs real fps with nothing in the run output to flag it. dossage's own
+   migration test used a 0.70ms/frame one; that alone would have moved
+   every number in this campaign.
 4. **Run** >= 3 minutes of gameplay so startup amortizes (the first ~300
    frames are genuinely slower; a short run reports startup, not steady
    state). Fold `vcctrl_audio_verdict` into mid-run health checks, not just
