@@ -66,6 +66,23 @@ shared series later (a real `git format-patch`, reviewed, given the next
 free shared slot), and it's much cheaper than removing a mistakenly-
 shared one after other ports have already pinned past it.
 
+**A local overlay is transient state, not a permanent part of a port's
+build -- delete it when the investigation that needed it closes.**
+`apply-patches.sh` applies every `*.patch` file in `patches/<vendor>-
+local/` unconditionally; there's no disabled-but-present state short of
+the file's absence. A temporary diagnostic left in a local overlay
+silently taxes every subsequent build of *that one port* forever,
+including whatever build a benchmark result or a release gets cut
+from -- the exact hazard the shared-series removal-planning rule above
+exists to prevent, just scoped down to a single port instead of every
+port, which paradoxically makes it easier to leave behind: no other
+port's numbers will ever flag it. Verified by real migration test
+(2026-08-31, dossage/Passage retrofitting a since-removed shared
+diagnostic as a local overlay): removing the overlay file is one command
+and restores the tree exactly. Before treating any benchmark or release
+build as final, confirm `patches/<vendor>-local/` is empty or that
+anything left in it is deliberate and documented, not forgotten.
+
 ## Commit / patch subject
 
 Prefix the subject with a bracketed tag identifying what layer the patch
