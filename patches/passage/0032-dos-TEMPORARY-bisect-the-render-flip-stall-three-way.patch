@@ -1,0 +1,128 @@
+From c0c03bb41a7b86dd300774a0d583739a0353efdd Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Mon, 31 Aug 2026 17:22:20 -0700
+Subject: [PATCH] dos: TEMPORARY -- bisect the render/flip stall three ways
+
+Refines patch 0031's diagnostic. Removal is planned alongside it.
+
+0031 established by direct measurement that the ~280ms mid-run stalls sit
+entirely inside the render/flip span: pump_ms was 0.045ms and tail_ms
+4.2ms on the stall frames, indistinguishable from every normal frame. So
+audio and game logic are excluded, and the cost is somewhere in the span
+that draws the world, scales it up, and pushes it to VRAM.
+
+This splits that span: worldrender_ms (the game composing its own
+buffer), blowup_ms (scaling into the window surface) and present_ms (the
+VRAM flush).
+
+Two things were ruled out by inspection rather than measurement first,
+recorded so nobody re-treads them:
+
+- The Cirrus LFB/VRAM-aperture defect (HARDWARE.md's known-issues table)
+  is NOT live here. SDL/0019 and SDL/0020 are both applied, and the
+  runtime log confirms 0019 acting: "LFB-decision #1: ...
+  lfb_available=1 -> use_lfb=0", banked=1. The chip's defect is handled.
+
+- blowUpChanged forcing a full-surface present is NOT the cause, despite
+  looking conclusive in the source. That flag is set in exactly two
+  places: its initial value, and inside a getKeyDown(SDL_SCANCODE_B)
+  debug-key handler. During a normal run it fires once, on frame 1. A fix
+  targeting it was written, verified visually, then reverted when the
+  trigger was checked -- the mechanism was real but never fires.
+
+Costs a normal frame a few clock reads and no file I/O; the emit is still
+gated on an anomalous frame. Detector re-verified to fire before use, as
+with 0031: thresholds lowered, all three new fields confirmed populating,
+thresholds restored, rebuilt.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ gameSource/game.cpp | 34 ++++++++++++++++++++++++++++++++--
+ 1 file changed, 32 insertions(+), 2 deletions(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 652dd84..d276b3e 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -87,6 +87,15 @@ int blowUpStep = -1;
+ // flag to force update of entire screen
+ int blowUpChanged = true;
+ 
++#ifdef __DJGPP__
++// TEMPORARY DIAGNOSTIC: sub-stage timings for the stall bisection, set
++// inside flipGameImageOntoScreen's native path and read by the STALLDBG
++// emit at the end of the loop. Globals rather than plumbing, because this
++// is temporary and plumbing would touch signatures that patch 0030 owns.
++Uint64 g_stallBlowupNS = 0;
++Uint64 g_stallPresentNS = 0;
++#endif
++
+ 
+ char fullScreen = true;
+ 
+@@ -448,6 +457,10 @@ void flipGameImageOntoScreen( SDL_Surface *inScreen ) {
+             SDL_FillSurfaceRect( inScreen, NULL, 0 );
+             }
+ 
++#ifdef __DJGPP__
++        const Uint64 stallBlowupT0 = SDL_GetTicksNS();
++#endif
++
+         blowupOntoScreenNative( gameImage,
+                                 width, totalImageHeight, blowUpFactor,
+                                 inScreen );
+@@ -456,6 +469,11 @@ void flipGameImageOntoScreen( SDL_Surface *inScreen ) {
+             SDL_UnlockSurface( inScreen );
+             }
+ 
++#ifdef __DJGPP__
++        const Uint64 stallBlowupT1 = SDL_GetTicksNS();
++        g_stallBlowupNS = stallBlowupT1 - stallBlowupT0;
++#endif
++
+         SDL_Rect presentRect;
+         presentRect.w = blowUpFactor * width;
+         presentRect.h = blowUpFactor * totalImageHeight;
+@@ -464,6 +482,10 @@ void flipGameImageOntoScreen( SDL_Surface *inScreen ) {
+ 
+         presentScreen( inScreen, &presentRect, blowUpChanged );
+ 
++#ifdef __DJGPP__
++        g_stallPresentNS = SDL_GetTicksNS() - stallBlowupT1;
++#endif
++
+         // we've handled any blow up change
+         blowUpChanged = false;
+         return;
+@@ -1413,6 +1435,10 @@ char playGame() {
+             }
+             
+         
++#ifdef __DJGPP__
++        const Uint64 stallTr = SDL_GetTicksNS();   // world render done
++#endif
++
+         flipGameImageOntoScreen( screen );
+ 
+ #ifdef __DJGPP__
+@@ -2145,11 +2171,15 @@ char playGame() {
+                 if( sf != NULL ) {
+                     fprintf( sf,
+                              "[stall] frame=%d work_ms=%f render_flip_ms=%f "
+-                             "pump_ms=%f tail_ms=%f\n",
++                             "pump_ms=%f tail_ms=%f | worldrender_ms=%f "
++                             "blowup_ms=%f present_ms=%f\n",
+                              frameCount, workMs,
+                              (double)( stallT1 - stallT0 ) / 1000000.0,
+                              (double)( stallT2 - stallT1 ) / 1000000.0,
+-                             tailMs );
++                             tailMs,
++                             (double)( stallTr - stallT0 ) / 1000000.0,
++                             (double)g_stallBlowupNS / 1000000.0,
++                             (double)g_stallPresentNS / 1000000.0 );
+                     fclose( sf );
+                     }
+                 }
+-- 
+2.47.3
+
