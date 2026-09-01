@@ -123,7 +123,12 @@ stalls-vs-tightening finding for a real case.
 `templates/BENCHMARK.md` for a single result; `gallery/<name>/` once a
 port is showcase-ready. If a temporary diagnostic patch was landed in
 `shared/` to get here, land its removal too (see the `review` skill) —
-don't leave it as a silent tax on every port that pins past it.
+don't leave it as a silent tax on every port that pins past it. Same
+check for your own `patches/<vendor>-local/` overlay if you used one —
+it applies unconditionally, so a forgotten local diagnostic silently
+taxes every subsequent build of *your own port*, including whatever
+build this result gets cut from. Confirm it's empty or deliberately
+documented before treating the result as final.
 
 ## Land a shared/ patch that came out of this?
 
