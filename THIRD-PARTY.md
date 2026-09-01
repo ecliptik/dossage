@@ -97,12 +97,13 @@ Cave Story's freeware-but-not-redistributed data in doskutsu. See
 - **License:** zlib
 - **Source:** https://github.com/libsdl-org/SDL
 - **Pinned ref:** `main` @ `74a746281f2208e07a7680560fcb7ec57565228e`
-  (same pin as doskutsu's manifest, matching the shared
-  `patches/sdl3-dos/` series this repo consumes via `.sdl-dos-ports`)
+  (matches this repo's own vendored `patches/SDL/` series, originally
+  seeded from `sdl-dos-ports`' `shared/patches/sdl3-dos/` reference copy
+  at scaffold time)
 - **Role:** Platform abstraction; the DOS backend is what makes the port
   possible.
-- **Modifications:** shared `.sdl-dos-ports/shared/patches/sdl3-dos/`
-  series, symlinked at `patches/SDL/`.
+- **Modifications:** this repo's own `patches/SDL/` series (real,
+  vendored files -- not a live link to `sdl-dos-ports`).
 
 ### SDL3_mixer (release-3.2.x)
 
@@ -112,8 +113,14 @@ Cave Story's freeware-but-not-redistributed data in doskutsu. See
 - **Role:** Audio device/stream plumbing. Passage's own software synth
   drives raw samples directly -- no WAV/OGG/MP3/MIDI file-decode path is
   used from this library.
-- **Modifications:** shared `.sdl-dos-ports/shared/patches/sdl3-mixer/`
-  series, symlinked at `patches/SDL_mixer/`.
+- **Modifications:** none currently -- this repo has no `patches/SDL_mixer/`
+  (no symlink, no vendored copy). <!-- FLAGGED 2026-09-01: this section
+  reads as unadapted boilerplate; dossage's own patches/ has no
+  SDL_mixer entry and vendor/sources.manifest doesn't pin an SDL_mixer
+  SHA either -- worth dossage's own session confirming whether this
+  section (and the pinned ref above) should be removed entirely rather
+  than left inaccurate. -->
+
 
 ### DJGPP libc
 
