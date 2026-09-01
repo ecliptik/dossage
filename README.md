@@ -4,7 +4,7 @@ DOSSAGE is a port of Jason Rohrer's [Passage](https://hcsoftware.sourceforge.net
 
 The name is a portmanteau of **DOS** and **Passage**, matching the naming convention of its sibling port [doskutsu](https://forgejo.ecliptik.com/ecliptik/doskutsu) (DOS + Doukutsu Monogatari).
 
-DOSSAGE exists for preservation and the engineering challenge of running Passage on a 1990s MS-DOS PC. It is also intended to become the copy-paste starting skeleton for future ports in the [sdl-dos-ports](https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports) hub, once finished -- Passage's engine surface (raw SDL 1.2, no mixer/image/font libraries) is about as small as a real DOS port gets.
+DOSSAGE exists for preservation and the engineering challenge of running Passage on a 1990s MS-DOS PC. It is also intended to become the copy-paste starting skeleton for future ports in the [sdl-dos-ports](https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports) hub -- Passage's engine surface (raw SDL 1.2, no mixer/image/font libraries) is about as small as a real DOS port gets.
 
 ### Screenshots
 
@@ -19,15 +19,32 @@ DOSSAGE exists for preservation and the engineering challenge of running Passage
 
 ## Status
 
-**PLAYABLE.** The SDL 1.2 -> SDL3 migration and DJGPP platform port compiled and linked clean, and boots to the title screen and into gameplay under DOSBox-X with real-MS-DOS-representative filesystem settings (`lfn=false`, all asset/settings filenames renamed 8.3-safe) -- verified 2026-08-26. Audio device init and the synthesis math are confirmed correct (see `PLAN.md`); real audibility is deferred to real hardware, since DOSBox-X in this dev environment can't conclusively demonstrate playback. No real-hardware run yet. See [PLAN.md](./PLAN.md) and this port's entry in the hub's [ports.yaml](https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports/src/branch/main/ports.yaml) for current milestone state, and [STATUS.md](./STATUS.md) for the structured summary.
+**PLAYABLE and real-hardware validated.** DOSSAGE boots, renders, plays with
+audio, and completes full sessions on period hardware. Measured on a
+486DX2-66 / 48 MB / PicoGUS (SB mode) / Cirrus CL-GD5430 rig:
 
-**Target.** Passage's own source (`gameSource/game.cpp`) locks a `lockedFrameRate` of **15 fps** -- much lower than doskutsu's 50 fps design rate -- so this port's performance bar is hitting that original 15 fps, sustained, on the DOS minimum/recommended target below, rather than chasing the highest frame rate possible.
+| | |
+|---|---|
+| **Frame rate** | **14.94 fps** sustained (from 13.99 before the frame-pacer work) |
+| Steady-state | 14.9989 fps |
+| Audio | working (11025 Hz mono, `AUDIO_TIER=low`) |
+| Visual | clean, no corruption across multi-minute runs |
+
+**On the 15 fps target.** Passage's own `game.cpp` sets
+`lockedFrameRate = 15`, which makes 15.000 fps a *ceiling* rather than a
+goal: the frame pacer's deadline advances by exactly one tick per frame, so
+no frame is ever permitted to run fast to repay a slow one, and the measured
+average can approach 15.000 but never cross it. Steady-state sits at
+14.9989 fps -- the game holding its cap to four significant figures. The
+run-average shortfall is a handful of discrete ~250-325 ms stalls in the
+VRAM flush (documented in `PLAN.md`); eliminating all of them would land
+near 14.99, still under the ceiling. See `PLAN.md` for the full campaign,
+including the eight hypotheses that were falsified along the way.
 
 | CPU | Role |
 |---|---|
 | 486DX2-50 | minimum and recommended target (per `ports.yaml`) |
-
-Once playable and optimized, this port will be measured across the same CPU / video-card / sound-card matrix doskutsu uses (see its [docs/BENCHMARKS.md](https://forgejo.ecliptik.com/ecliptik/doskutsu/src/branch/main/docs/BENCHMARKS.md) for the shape that matrix takes) on the same physical rig, currently configured as a Pentium OverDrive 83 MHz / 48 MB RAM / PicoGUS / Mach64.
+| 486DX2-66 | validated benchmark configuration |
 
 ---
 
@@ -39,44 +56,134 @@ Unlike doskutsu, **DOSSAGE ships its own game data.** Passage's engine *and* its
 
 ## Requirements
 
-Passage's original engine surface is tiny (no codec libraries, no font rendering, a from-scratch software synthesizer) -- the DOS requirements are correspondingly modest.
+### To run DOSSAGE (the DOS machine)
 
-**Target**
+- **CPU:** 486DX2-50 or faster
+- **RAM:** 8 MB or more (DPMI; the game itself is modest)
+- **Video:** VESA 2.0+ via [UniVBE](https://en.wikipedia.org/wiki/SciTech_SNAP) strongly recommended -- see [Video cards](#video-cards) below
+- **Sound:** Sound Blaster-compatible, or none (Passage runs silently without one)
+- **OS:** MS-DOS 6.22 or compatible
 
-- CPU: 486DX2-50 or faster
-- Video: VESA 1.2+
-- Sound: Sound Blaster-compatible (via SDL3-DOS's audio backends), or none -- Passage's own audio is optional
-- OS: MS-DOS 6.22 or compatible
+### To build DOSSAGE (a Linux or macOS host)
 
-Finalized once the port reaches `PLAYABLE` and real-hardware measurement confirms the floor.
+- [DJGPP cross-compiler](https://github.com/andrewwutw/build-djgpp) (`i586-pc-msdosdjgpp-gcc`)
+- `cmake`, `git`, `make`, `gcc`, `python3`
+- `dosbox-x` -- optional, only for the local smoke test
 
 ---
 
-## Building
+## Quickstart
 
-Building needs a Linux (or WSL) host with:
+From a clean clone to a playable DOS build.
 
-- the [DJGPP](https://github.com/andrewwutw/build-djgpp) cross-compiler
-- `cmake`, `git`, `make`, `gcc`, `python3`
-- `dosbox-x` -- runs the automated build-verification smoke tests
-
-This repo consumes the [sdl-dos-ports](https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports) hub's shared SDL3-DOS platform layer as a git submodule at `.sdl-dos-ports/`:
+### 1. Clone and fetch
 
 ```bash
 git clone https://forgejo.ecliptik.com/ecliptik/dossage.git
 cd dossage
-git submodule update --init --recursive
-./scripts/setup-symlinks.sh          # one-time: link tools/djgpp (if using the ~/emulators hub)
-./scripts/fetch-sources.sh           # clone the upstream repos at pinned SHAs
-./scripts/fetch-vendor-binaries.sh   # fetch CWSDPMI.EXE
-./scripts/apply-patches.sh           # apply DOS-port patches
-make sdl3                            # cross-build SDL3 (no SDL3_mixer/SDL3_image -- unneeded)
-make game                            # build/dossage.exe
-make stage                           # build/stage/ -- DOSSAGE.EXE + CWSDPMI.EXE + assets together
-tools/dosbox-launch.sh --fast --stage --exe DOSSAGE.EXE   # smoke-test under DOSBox-X
+git submodule update --init --recursive   # the shared SDL3-DOS platform layer
+```
+
+### 2. Make the DJGPP toolchain visible
+
+The build expects `i586-pc-msdosdjgpp-gcc` on `PATH`. Either install
+[build-djgpp](https://github.com/andrewwutw/build-djgpp) and add its `bin/`
+to `PATH`, or symlink an existing install:
+
+```bash
+./scripts/setup-symlinks.sh    # links tools/djgpp if you keep one under ~/emulators
+export PATH="$PWD/tools/djgpp/bin:$PATH"
+```
+
+### 3. Fetch upstream sources and build
+
+```bash
+./scripts/fetch-sources.sh           # SDL3, Passage, minorGems at pinned SHAs
+./scripts/fetch-vendor-binaries.sh   # CWSDPMI.EXE (the DPMI host)
+./scripts/apply-patches.sh           # apply this port's patch series
+
+make sdl3                            # cross-build SDL3 for DOS (~10 min)
+make render-music AUDIO_TIER=low     # pre-render SONG.WAV from Passage's synth
+make game        AUDIO_TIER=low      # build/dossage.exe
+make stage       AUDIO_TIER=low      # assemble build/stage/
+```
+
+> **`AUDIO_TIER` must match across all three commands.** It selects both the
+> compiled-in audio format and the rendered `SONG.WAV`, and a mismatch is not
+> a build error -- it plays the music at the wrong speed. `low` is
+> 11025 Hz mono (validated on real hardware); `high` is 22050 Hz stereo
+> (never real-hardware tested). If you switch tiers, re-run all three.
+
+### 4. Smoke-test locally (optional)
+
+```bash
+tools/dosbox-launch.sh --fast --stage --exe DOSSAGE.EXE
+```
+
+DOSBox-X is a correctness check only -- **never** a performance proxy. Its
+timing bears no relation to real hardware.
+
+### 5. Copy to the DOS machine
+
+`build/stage/` holds everything needed. Copy these onto the DOS machine
+(floppy, CF card, network -- whatever you have) into a directory such as
+`C:\DOSSAGE\`:
+
+```
+DOSSAGE.EXE      the game
+CWSDPMI.EXE      DPMI host -- must sit alongside DOSSAGE.EXE or be on PATH
+CWSDPMI.DOC      CWSDPMI's redistribution terms -- keep with the .EXE
+graphics/        .tga art assets
+music/           SONG.WAV + music.tga
+settings/        .ini files (width, height, etc.)
+```
+
+`CWSDPMI.DOC` is not optional if you pass copies on: CWSDPMI is freeware and
+redistributable, but its own terms must travel with the binary. `make stage`
+places it automatically and refuses to run without it.
+
+Ignore `LOGS/` and `CWSDPMI.SWP` if they appear -- both are runtime
+artifacts, not build outputs.
+
+### 6. Run it
+
+```
+C:\> CD \DOSSAGE
+C:\DOSSAGE> DOSSAGE.EXE
+```
+
+Any key dismisses the title screen and starts the game. Arrow keys move.
+**Q** or **ESC** quits, printing a frame-rate summary. A full playthrough is
+about five minutes -- that is the whole point of the piece.
+
+To capture the frame-rate line for benchmarking:
+
+```
+C:\DOSSAGE> DOSSAGE.EXE > RESULT.TXT
 ```
 
 ---
+
+## Video cards
+
+**No per-card environment variables or configuration are needed.** The two
+hints this port depends on (`SDL_HINT_DOS_PREFER_LFB` and
+`SDL_HINT_DOS_MAX_BPP=16`) are compiled in and applied at startup, so
+swapping cards needs no `SET` commands, no batch files, and no edits.
+
+**You must re-run UniVBE's `UVCONFIG.EXE` after every card swap.** UniVBE
+silently declines to install for a card it was not configured for, and DOS
+then falls back to the card's bare ROM VBE -- which on this port looks like
+a crash or a badly wrong video mode, with no error message pointing at the
+real cause. This bit us: a Cirrus came up reporting VBE 1.2 until UVCONFIG
+was re-run, after which it reported `Universal VESA VBE 6.70 (VBE 3.0)`.
+`UVCONFIG.EXE` is interactive and cannot be safely automated.
+
+| Card | Status |
+|---|---|
+| **Cirrus CL-GD5430/5434** | **Validated.** Runs banked -- the shared layer force-disables LFB on this chip for a genuine hardware aperture defect. 14.94 fps. |
+| **S3 ViRGE (86C375)** | **Validated.** Uses LFB at 320x240x16. 14.16-14.5 fps. |
+| **ATI Mach64** | **Not yet verified with the current build.** Expected to work, but the compiled-in `MAX_BPP=16` cap changes which VESA mode it negotiates -- it previously ran 640x480x24 banked, since it has no 320x240 mode. Worth a confirmation run before trusting a benchmark number from it. |
 
 ## How This Project Is Developed
 
@@ -101,4 +208,4 @@ DOSSAGE's own source -- the build system, scripts, and documentation -- is **MIT
 | [DJGPP](https://www.delorie.com/djgpp/) libc | 32-bit DOS C runtime, by DJ Delorie | [GPL + runtime exception](https://www.delorie.com/djgpp/v2faq/faq11_2.html) | Yes - the exception permits static linking |
 | [CWSDPMI](https://www.delorie.com/pub/djgpp/current/v2misc/) | DPMI host, by Charles W. Sandmann | freeware, redistributable | No - ships alongside as a separate program |
 
-Full attribution detail: [THIRD-PARTY.md](./THIRD-PARTY.md) (added once dependencies are vendored).
+Full attribution detail: [THIRD-PARTY.md](./THIRD-PARTY.md).

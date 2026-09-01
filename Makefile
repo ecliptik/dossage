@@ -123,13 +123,23 @@ game-clean:
 
 STAGE_DIR    := $(BUILD_DIR)/stage
 CWSDPMI_EXE  := $(REPO_ROOT)/vendor/cwsdpmi/cwsdpmi.exe
+# LICENSE REQUIREMENT, not an optional extra: CWSDPMI is freeware and
+# redistributable, but its own terms must travel with the binary. See
+# LICENSE-REVIEW.md -- "Bundled releases must still include CWSDPMI's own
+# redistribution terms (CWSDPMI.DOC, freeware/redistributable) alongside the
+# binary." build/stage/ IS what gets copied to a DOS machine and what a
+# release archive is cut from, so the .DOC has to be staged with the .EXE or
+# every copy made from it is out of compliance.
+CWSDPMI_DOC  := $(REPO_ROOT)/vendor/cwsdpmi/cwsdpmi.doc
 
 .PHONY: stage
 stage: $(BUILD_DIR)/dossage.exe
 	@test -f "$(CWSDPMI_EXE)" || (echo "error: $(CWSDPMI_EXE) missing -- run ./scripts/fetch-vendor-binaries.sh" >&2; exit 1)
+	@test -f "$(CWSDPMI_DOC)" || (echo "error: $(CWSDPMI_DOC) missing -- required by CWSDPMI's redistribution terms; run ./scripts/fetch-vendor-binaries.sh" >&2; exit 1)
 	mkdir -p "$(STAGE_DIR)"
 	install -m 0644 $(BUILD_DIR)/dossage.exe "$(STAGE_DIR)/DOSSAGE.EXE"
 	install -m 0644 $(CWSDPMI_EXE)           "$(STAGE_DIR)/CWSDPMI.EXE"
+	install -m 0644 $(CWSDPMI_DOC)           "$(STAGE_DIR)/CWSDPMI.DOC"
 	rm -rf "$(STAGE_DIR)/graphics" "$(STAGE_DIR)/music" "$(STAGE_DIR)/settings"
 	cp -r $(PASSAGE_SRC)/graphics "$(STAGE_DIR)/graphics"
 	cp -r $(PASSAGE_SRC)/music    "$(STAGE_DIR)/music"
