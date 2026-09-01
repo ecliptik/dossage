@@ -1,0 +1,190 @@
+From 68bf605bbeca36159e42bd003a8fda7b62cabfb8 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Mon, 31 Aug 2026 17:25:12 -0700
+Subject: [PATCH] dos: remove the temporary stall diagnostics (0031, 0032)
+
+Removal was planned at landing for both, per the hub convention that a
+temporary diagnostic patch must not become a permanent tax. This is that
+removal, and it is the shipping configuration.
+
+What they bought, and why they can now go:
+
+0031 established that the mid-run stalls are NOT where six earlier
+hypotheses put them. pump_ms measured 0.045ms and tail_ms 4.2ms on stall
+frames -- indistinguishable from normal frames -- which excluded the
+audio ring refill and the game-logic tail outright, and located the cost
+entirely inside the render/flip span. It also showed the startup stall
+and the mid-run stall share a signature (render_flip carrying ~100% of
+the work), correcting an earlier conclusion that they were different
+bugs.
+
+0032 split that span further to name the sub-stage.
+
+Everything they measured is recorded in docs/PLAN.md's measured-constants
+table, so removing the instrumentation costs no knowledge.
+
+Keeping them would cost real fps: this port has measured diagnostic
+overhead twice now -- 0.70ms/frame for SDL/0136's per-yield timing, and
+~0.4-0.5fps for the per-frame logging patch 0028 removed. The conditional
+emit here is far lighter, but a shipping build should carry none of it.
+
+The frame pacer itself (patch 0030) is untouched. Real-hardware result
+stands at 14.94fps, up from 13.992, with steady-state 14.9989fps against
+the 15.000fps ceiling lockedFrameRate=15 imposes.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ gameSource/game.cpp | 79 ---------------------------------------------
+ 1 file changed, 79 deletions(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index d276b3e..7034511 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -87,14 +87,6 @@ int blowUpStep = -1;
+ // flag to force update of entire screen
+ int blowUpChanged = true;
+ 
+-#ifdef __DJGPP__
+-// TEMPORARY DIAGNOSTIC: sub-stage timings for the stall bisection, set
+-// inside flipGameImageOntoScreen's native path and read by the STALLDBG
+-// emit at the end of the loop. Globals rather than plumbing, because this
+-// is temporary and plumbing would touch signatures that patch 0030 owns.
+-Uint64 g_stallBlowupNS = 0;
+-Uint64 g_stallPresentNS = 0;
+-#endif
+ 
+ 
+ char fullScreen = true;
+@@ -457,10 +449,6 @@ void flipGameImageOntoScreen( SDL_Surface *inScreen ) {
+             SDL_FillSurfaceRect( inScreen, NULL, 0 );
+             }
+ 
+-#ifdef __DJGPP__
+-        const Uint64 stallBlowupT0 = SDL_GetTicksNS();
+-#endif
+-
+         blowupOntoScreenNative( gameImage,
+                                 width, totalImageHeight, blowUpFactor,
+                                 inScreen );
+@@ -469,11 +457,6 @@ void flipGameImageOntoScreen( SDL_Surface *inScreen ) {
+             SDL_UnlockSurface( inScreen );
+             }
+ 
+-#ifdef __DJGPP__
+-        const Uint64 stallBlowupT1 = SDL_GetTicksNS();
+-        g_stallBlowupNS = stallBlowupT1 - stallBlowupT0;
+-#endif
+-
+         SDL_Rect presentRect;
+         presentRect.w = blowUpFactor * width;
+         presentRect.h = blowUpFactor * totalImageHeight;
+@@ -482,10 +465,6 @@ void flipGameImageOntoScreen( SDL_Surface *inScreen ) {
+ 
+         presentScreen( inScreen, &presentRect, blowUpChanged );
+ 
+-#ifdef __DJGPP__
+-        g_stallPresentNS = SDL_GetTicksNS() - stallBlowupT1;
+-#endif
+-
+         // we've handled any blow up change
+         blowUpChanged = false;
+         return;
+@@ -1171,22 +1150,6 @@ char playGame() {
+ 
+     while( !done ) {
+ 
+-#ifdef __DJGPP__
+-        // TEMPORARY DIAGNOSTIC (STALLDBG.LOG): locate the w7-class stall.
+-        //
+-        // A previous round instrumented render+flip+pump and produced a
+-        // sharp result: 16 stall lines, ALL inside frames 0-21 (the startup
+-        // window), and NOTHING at w7 -- even though PACEDBG confirmed w7's
+-        // usual ~333ms stall happened on that same run. The detector was
+-        // proven to fire, so that silence is evidence rather than absence:
+-        // whatever costs w7 its ~330ms is NOT in the render/flip/pump span.
+-        //
+-        // This extends coverage to the only remaining span -- the loop tail
+-        // (game logic, movement, aging, chest checks, event polling) between
+-        // the pacer and the end of the loop body. Logs on EITHER a slow work
+-        // span or a slow tail, so whichever one w7 lives in, it surfaces.
+-        const Uint64 stallT0 = SDL_GetTicksNS();
+-#endif
+ 
+         if( getKeyDown( SDL_SCANCODE_S ) ) {
+             stepDX = false;
+@@ -1435,16 +1398,8 @@ char playGame() {
+             }
+             
+         
+-#ifdef __DJGPP__
+-        const Uint64 stallTr = SDL_GetTicksNS();   // world render done
+-#endif
+-
+         flipGameImageOntoScreen( screen );
+ 
+-#ifdef __DJGPP__
+-        const Uint64 stallT1 = SDL_GetTicksNS();   // end render+flip
+-#endif
+-
+ #ifdef __DJGPP__
+         // DOS-PORT: top up the audio ring explicitly once per frame,
+         // rather than relying solely on the cooperative-scheduler audio
+@@ -1582,10 +1537,6 @@ char playGame() {
+ #endif
+ 
+ 
+-#ifdef __DJGPP__
+-        const Uint64 stallT2 = SDL_GetTicksNS();   // end audio pump
+-#endif
+-
+         // done with frame
+         double newTimestamp = Time::getCurrentTime();
+         
+@@ -1821,10 +1772,6 @@ char playGame() {
+         // start timing next frame
+         lastFrameTimeStamp = Time::getCurrentTime();
+ 
+-#ifdef __DJGPP__
+-        const Uint64 stallT3 = SDL_GetTicksNS();   // pacer done; tail begins
+-#endif
+-
+ 
+         // DOS-PORT: rest-of-loop-cost timing (was here through patch
+         // 0026) served its purpose -- see presentScreen()'s own comment
+@@ -2159,32 +2106,6 @@ char playGame() {
+             maxExploreScore = exploreScore;
+             }
+ 
+-#ifdef __DJGPP__
+-        {
+-            const Uint64 stallT4 = SDL_GetTicksNS();
+-            const double workMs = (double)( stallT2 - stallT0 ) / 1000000.0;
+-            const double tailMs = (double)( stallT4 - stallT3 ) / 1000000.0;
+-
+-            if( ( workMs > 100.0 || tailMs > 50.0 ) &&
+-                workMs < 10000.0 && tailMs < 10000.0 ) {
+-                FILE *sf = fopen( "STALLDBG.LOG", "ab" );
+-                if( sf != NULL ) {
+-                    fprintf( sf,
+-                             "[stall] frame=%d work_ms=%f render_flip_ms=%f "
+-                             "pump_ms=%f tail_ms=%f | worldrender_ms=%f "
+-                             "blowup_ms=%f present_ms=%f\n",
+-                             frameCount, workMs,
+-                             (double)( stallT1 - stallT0 ) / 1000000.0,
+-                             (double)( stallT2 - stallT1 ) / 1000000.0,
+-                             tailMs,
+-                             (double)( stallTr - stallT0 ) / 1000000.0,
+-                             (double)g_stallBlowupNS / 1000000.0,
+-                             (double)g_stallPresentNS / 1000000.0 );
+-                    fclose( sf );
+-                    }
+-                }
+-            }
+-#endif
+ 
+         }
+ 
+-- 
+2.47.3
+
