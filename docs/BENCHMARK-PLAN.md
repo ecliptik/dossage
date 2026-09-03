@@ -37,34 +37,55 @@ bottleneck list is the wrong tool here; `docs/timing.md`'s pacer material is
 the right one. Re-check this if the CPU ever changes -- the regime can shift
 between campaigns -- but on this CPU it is settled.
 
-## Pre-campaign work item: the KPI needs percentiles
+## Pre-campaign work item: the KPI needs percentiles (CLOSED 2026-09-02)
 
-**dossage currently cannot express the KPI the skill requires.** It reports
-only Passage's own single average (`frameCount / netTime` at `game.cpp`), and
-emits no `fps_p50`/`fps_p95` via `shared/include/runmanifest.h`.
+**Resolved.** Option 1 (add RUNMANIFEST percentile emission) was landed as
+`patches/passage/0034`, plus a companion `PORT_BUILD_SHA12` Makefile wiring
+that closes the separate "nothing in a run log names the build" gap noted
+below. `game.cpp` now captures real per-frame duration each loop iteration
+and, at the existing clean-exit point, computes `fps_p50`/`fps_p95` and
+emits a full RUNMANIFEST block to `RUNMANI.LOG`, alongside (not replacing)
+the pre-existing `Frame rate = ...` average printf.
 
-That is not a formality. The whole difficulty of the closing campaign was
-that a single average is dominated by a handful of ~250-325 ms stalls: the
-average read 14.94 while steady-state was 14.9989. **A p50 would have shown
-~15.0 next to a much lower p95 on the very first run, and the stall story
-would have been obvious immediately instead of after eight falsified
-hypotheses.**
+**It did not land clean on the first try, and the failure is itself
+informative.** build-qa's DOSBox-X smoke of the first version found
+`fps_p50` corrupted to a nonsensical ~13 million in a natural full-length
+life -- roughly half of all captured per-frame samples were reading as
+near-zero, while the coarse `frameCount/netTime` average stayed a normal
+15.02fps throughout. Root cause traced (not fully confirmed by a dedicated
+probe) to `Time::getCurrentTime()`'s underlying DJGPP tick counter
+occasionally stalling and then "catching up" with a compensating large
+delta -- this file's own pacer history already documents that same class of
+tick loss elsewhere (`time(NULL)` losing over half its expected ticks in a
+reverted busy-wait experiment). The fix filters any captured `frameTime`
+that's `<=0` or below `0.001s` (the clock's own documented millisecond
+granularity floor) out of the percentile buffer before computation, and
+counts rejects visibly (`Frame-time samples: N used, N rejected...`) rather
+than silently correcting them away.
 
-Two options, decide before running:
-
-1. **Add RUNMANIFEST percentile emission** (preferred). Non-trivial -- needs
-   per-frame time capture plus a percentile computation at exit. Landing it
-   as a port-local patch is the natural home.
-2. **Run with the single average and document the limitation explicitly** in
-   every recorded result, so nobody later compares a dossage average against
-   another port's p50 as though they were the same measurement.
-
-Do not silently do (2) while writing the result up as though it satisfied the
-KPI.
+**Read this before trusting any dossage `fps_p50`/`fps_p95` figure,
+including from real hardware:** under DOSBox-X, the fix's own repeat smoke
+run technically passed (both fields present, `fps_p95 <= fps_p50`,
+plausible magnitudes) but rejected **60.4%** of samples in a 298s life, and
+the surviving ~40% clustered heavily on one or two discrete values (`16.67`
+recurring identically across three independent measurements) rather than
+spreading naturally. That is consistent with the fix correctly excluding
+impossible readings, but it is also consistent with the *surviving* samples
+still being coarser/less representative than a genuinely continuous
+per-frame signal -- a >60% discard rate is a lot of the distribution to be
+reconstructing a percentile from. Per this project's own rule (real
+hardware is authoritative, DOSBox-X is an automation gate -- see
+`CLAUDE.md`), this was judged not to block moving to real hardware, since
+the primary PASS/FAIL band below is average-based and the coarse average is
+unaffected by any of this -- but check the real-hardware run's own reject
+count and clustering before treating its `fps_p50`/`fps_p95` as more
+trustworthy than the average by default. A standalone `Time::getCurrentTime()`
+granularity/monotonicity probe (DOSBox-X vs. real hardware) is recommended,
+separately, to close this for good -- not done as part of this patch.
 
 ## The KPI, written down in advance
 
-Per card, on the 486DX2-66 + PicoGUS rig, build `cf5f9a5a861e`:
+Per card, on the 486DX2-66 + PicoGUS rig, build `9c90db0e7905`:
 
 - **PASS:** sustained fps within **0.3 fps** of the card's established figure
   (Cirrus 14.94, ViRGE 14.16-14.5), audio present throughout, no visual
@@ -76,13 +97,14 @@ Per card, on the 486DX2-66 + PicoGUS rig, build `cf5f9a5a861e`:
 - **Mach64 has no established figure** -- see its gate below. Its first run
   is exploratory and cannot pass or fail against a band that does not exist.
 
-Every result is attributed to `build_sha12 = cf5f9a5a861e`
-(re-baselined 2026-09-02; see "The build pin" below).
+Every result is attributed to `build_sha12 = 9c90db0e7905`
+(re-baselined 2026-09-02, second time same day; see "The build pin" below).
 
 ### The build pin
 
-**`build_sha12 = cf5f9a5a861e`**, re-baselined 2026-09-02. Recomputable at
-any time:
+**`build_sha12 = 9c90db0e7905`**, re-baselined 2026-09-02 (supersedes
+`cf5f9a5a861e` from earlier the same day, which was never used to record any
+result). Recomputable at any time:
 
     make build-sha12
 
@@ -96,20 +118,22 @@ cannot converge. `make game` writes it to `build/dossage.build-sha12` and
 readable on the target too.
 
 The corresponding binary is
-`sha256 750a5952777c3a3f06debaaaae4d4c3601df8d503257752244f9d9599aed9a74`
-at `AUDIO_TIER=high` (the default). Verified deterministic: two independent
-builds from a full `make game-clean` produced byte-identical output.
+`sha256 8480da383842a4b273dce263b144fcf0980d839ebcd36126c651126de1775afd`
+at `AUDIO_TIER=high` (the default). Independently reproduced by two separate
+sessions from a full `make game-clean`, byte-identical both times.
 
-**Known gap -- nothing in a run log names the build.** The hub's validation
-standard has the binary emit `build_sha12` into its own runmanifest, so a
-rig log proves which binary produced it. dossage has no runmanifest emission
-at all, so there is nothing to print the field; passing
-`-DPORT_BUILD_SHA12=` today would compile a macro no code reads. Closing
-this properly needs an engine-side change under `patches/passage/`, which
-would itself alter the binary -- so it must land *before* a baseline, never
-between a baseline and the run it anchors. Until then `BUILDSHA.TXT` in the
-staged tree is the witness, and the pre-flight's staged-tree hash check is
-what actually guards against running the wrong build.
+**Known gap CLOSED 2026-09-02.** `patches/passage/0034` wires
+`PORT_BUILD_SHA12` into the compile (`Makefile`, `BUILD_SHA12_STAMP` forces
+a rebuild when the hash changes, matching the existing `AUDIO_TIER_STAMP`
+pattern) and reads it into the RUNMANIFEST block's `binary_sha12` field at
+runtime -- confirmed correct via the actual `RUNMANI.LOG` output, not just
+the compile line (a `strings`-grep of the binary itself is a false-negative
+here: GCC constant-folds the short string into inline stores, invisible to
+`strings` despite being genuinely correct -- confirmed via objdump). A rig
+log now proves which binary produced it, same as the hub's validation
+standard for every other port. `BUILDSHA.TXT` in the staged tree remains a
+second, independent witness (catches a staged-tree mixup even before the
+binary runs) -- keep hash-verifying it, this doesn't replace that step.
 
 #### Why this was re-baselined, and what it cost
 
@@ -143,6 +167,11 @@ Treat the first run on the Cirrus as re-establishing the reference under
 0.3 fps of 14.94 anyway, that is evidence the two builds are equivalent, not
 merely a pass.
 
+**Done, 2026-09-02: 14.817881 fps under `build_sha12=9c90db0e7905`** (which
+superseded `cf5f9a5a861e` before this ran -- see "The build pin" above),
+0.122 fps from 14.94, inside the 0.3 fps band -- confirms build equivalence
+per the paragraph above. Full result: `docs/benchmarks/cirrus-cl-gd5434-2026-09-02.md`.
+
 ## The matrix
 
 One CPU (486DX2-66), one sound card (PicoGUS, SB mode), three video cards.
@@ -150,7 +179,7 @@ One CPU (486DX2-66), one sound card (PicoGUS, SB mode), three video cards.
 
 | Card | State | What this run is for |
 |---|---|---|
-| Cirrus CL-GD5430 | validated, 14.94 fps | Reference/repeatability. Runs banked -- SDL/0019 force-disables LFB for a genuine aperture defect. |
+| Cirrus CL-GD5434 | **re-confirmed 2026-09-02, twice: 14.82 fps (`9c90db0e7905`), 14.77 fps (`f1f867ccadad`)** | Reference/repeatability. Runs banked -- SDL/0019 force-disables LFB for a genuine aperture defect. Two runs, two different builds, both in-band -- see `docs/benchmarks/cirrus-cl-gd5434-2026-09-02.md` and `...-f1f867ccadad.md`. |
 | S3 ViRGE 86C375 | validated, 14.16-14.5 fps | Confirm against the current build; earlier figures predate some pacer work. Uses LFB at 320x240x16. |
 | **ATI Mach64 215CT/-ET** | **UNVERIFIED** | **Gate first, then measure.** See below. |
 
@@ -248,4 +277,71 @@ the root cause, and it sat unrecognised in a log for hours.
   is real evidence about the mechanism and worth capturing.
 - **Post-exit black screen.** ~20 s after ESC, PS/2 responsive throughout,
   reboot normal -- so not a hang. Looks like video mode teardown on exit.
-  Unrelated to fps; note it if it recurs per-card.
+  Unrelated to fps; note it if it recurs per-card. **Recurred on the Cirrus
+  leg, 2026-09-02** (capture stick briefly lost lock, resolved via the
+  hardware camera to a clean prompt) -- second confirmed occurrence.
+- **`fps_p50`/`fps_p95` measure the wrong window -- RESOLVED (explained,
+  fix not yet landed) 2026-09-02.** Both fields still cluster above the
+  15fps design ceiling on real hardware (e.g. `fps_p50=fps_p95=16.67` in
+  the Cirrus run) even after the reject-filter fix. **Not a clock bug --
+  a definitional one, root-caused from the actual code, not measurement
+  noise:** `patches/passage/0034` captures `frameTime` as
+  `newTimestamp - lastFrameTimeStamp`, a window that starts *after* the
+  previous iteration's pacer sleep and ends *before* the current
+  iteration's own sleep -- i.e. it measures pure work time (render +
+  game logic + audio pump), deliberately excluding every frame's sleep,
+  because that is what the pacer's own `extraTime` calculation has
+  always needed it for. Since the pacer pads work time up to the full
+  66.67ms budget with sleep, work time is structurally never bounded by
+  15fps -- 1/work-time is >= 15fps whenever there is any slack at all,
+  which this rig has by ~24ms/frame (Section 1 gate, above). 60ms of
+  real work -> 16.67fps is squarely inside that documented range, not an
+  anomaly.
+  (Earlier text in this section guessed a DJGPP/DOSBox-X clock-
+  granularity explanation instead -- that was wrong, corrected here per
+  this project's own "correct the record" discipline. The lower reject
+  rate on real hardware, 24.0% vs. DOSBox-X's 60.4%, is real and still
+  stands as its own separate, true observation -- it just isn't the
+  explanation for the clustering.)
+  **The actual fix, scoped but not yet implemented**: measure the *full
+  paced period* instead -- the delta between consecutive
+  `lastFrameTimeStamp` values (both taken after their own sleep), not
+  `newTimestamp - lastFrameTimeStamp`. That window sits at ~66.67ms in
+  steady state (bounding instantaneous fps at <=15, matching the design
+  ceiling) and only exceeds it on a genuine stall -- the actual "5% of
+  frames were slower" shape a stall-catching KPI needs, and what the
+  original motivating story (a hidden low p95 next to a 14.94 average)
+  was always about. Queued as a new patch slot (`0035` at the DJGPP-
+  patch series' current tip) rather than amended into `0034` in place,
+  since `0034`'s specific diff already has a real-hardware PASS result
+  attached to it
+  (`docs/benchmarks/cirrus-cl-gd5434-2026-09-02.md`) -- freezing that
+  provenance outweighs keeping the patch count minimal, and it's a
+  distinct concern per this repo's own patch conventions regardless.
+  **Landed, `build_sha12=f1f867ccadad`, confirmed on real hardware
+  2026-09-02: real, not a DOSBox-X artifact.** `fps_p50=16.67` (~60ms)
+  and `fps_p95=9.09` (~110ms) reproduce identically on real hardware and
+  DOSBox-X, both now with a near-zero reject rate (real hardware: 0.22%;
+  DOSBox-X: 0.02% -- both essentially measuring the complete real
+  distribution, not a filtered subset). This rules out the DOSBox-X-
+  timer-artifact hypothesis raised earlier the same day -- per this
+  project's own rule (real hardware authoritative, DOSBox-X an
+  automation gate, `CLAUDE.md`), that hypothesis is now falsified, not
+  merely undecided. **This port's per-frame paced-period timing is
+  genuinely bimodal** on this CPU tier -- two real, environment-
+  independent clusters, not a single distribution around the 66.67ms
+  budget as assumed. Working (unconfirmed) explanation: 110ms is close
+  to 2x the classic PC BIOS/PIT tick (~54.925ms, 18.2Hz -- 9.09fps from
+  109.85ms is a near-exact match); 60ms doesn't cleanly match a small
+  integer multiple of that same tick, source not yet identified.
+  `fps_p50`/`fps_p95` are now **trustworthy as measurements** (the
+  capture is accurate on both environments) but the *interpretation*
+  needs care: this is a genuine bimodal-distribution finding, not the
+  single-tail-stall shape the KPI was originally written to expose --
+  don't compare it across cards as a simple number yet. **Queued as a
+  standalone `Time::getCurrentTime()`/pacer-timing probe** (isolated
+  from the full game) to identify the 60ms cluster's source -- two
+  independent sessions (build-qa, vcctrl-c3) both converged on
+  recommending this rather than guessing further from full-game data.
+  Not performed as part of this campaign. Full data:
+  `docs/benchmarks/cirrus-cl-gd5434-2026-09-02-f1f867ccadad.md`.
