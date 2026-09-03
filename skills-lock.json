@@ -6,7 +6,7 @@
       "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
       "sourceType": "git",
       "skillPath": "shared/skills/benchmark/SKILL.md",
-      "computedHash": "2ece717381caa1c94cabf6233d3e1164694464bb7472e294bf5d9fade874a8b0"
+      "computedHash": "9658c1ad119349172903c8fb34550400a1c73d9010e22f9c2a07ce77ed05a6b5"
     },
     "dos-emulator-workflow": {
       "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
@@ -41,14 +41,14 @@
       "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
       "sourceType": "git",
       "skillPath": ".claude/skills/port/SKILL.md",
-      "computedHash": "0a28f5c68eb6667c1a0485f05755b6a855dba37fc740c1a59eee581c552865b3"
+      "computedHash": "dc8d148c956f1709c2e4dffb496d47226266368675cf63e4d5dfa89e0d084afb"
     },
     "review": {
       "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
       "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
       "sourceType": "git",
       "skillPath": "shared/skills/review/SKILL.md",
-      "computedHash": "f20cb5b9d7f15446307be0cb1d79a10b51a15f07fd35b7efb1a8489a1ce7e35a"
+      "computedHash": "9de67b4ed8d62b1ba3cefda4e6161cc14fb412562ab4e48e4825265e227b90a4"
     },
     "vcctrl-camera": {
       "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
@@ -62,7 +62,7 @@
       "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
       "sourceType": "git",
       "skillPath": ".agents/skills/vcctrl-common-workflows/SKILL.md",
-      "computedHash": "8690f473e796262800b29ebbee023a23ac01cb7408f78920aed87e06caee2e21"
+      "computedHash": "d71472349162762d5637ebf2a6bea1980cfce09dd5f35fe8ffde8e6cde7f5f56"
     },
     "vcctrl-dinspect-sysinfo": {
       "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
