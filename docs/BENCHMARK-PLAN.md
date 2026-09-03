@@ -241,6 +241,7 @@ started with Mach64 first on 486DX2-50 since it's already staged and its
 |---|---|---|
 | 486DX2-50 | ATI Mach64 215CT/-ET | **First datum 2026-09-03: 13.685015 fps** (build `f1f867ccadad`). No reference to compare against. See `docs/benchmarks/mach64-215ct-486dx2-50-2026-09-03.md`. |
 | Am5x86-133 | ATI Mach64 215CT/-ET | **First datum 2026-09-03: 15.016779 fps** (build `f1f867ccadad`) -- fastest of the campaign, essentially at the design ceiling. CPU identity's `~100MHz`/`FPU: no` dinspect reading was chased down and confirmed as two real dinspect detection bugs (stale INT 11h FPU bit, over-generic AMD speed table), both fixed upstream same day -- the chip really is a working Am5x86-133. See `docs/benchmarks/mach64-215ct-am5x86-2026-09-03.md`. |
+| Pentium OverDrive 83 | ATI Mach64 215CT/-ET | **First datum 2026-09-03: 14.966555 fps** (build `f1f867ccadad`) -- same near-ceiling band as Am5x86-133. **CPU identity RESOLVED**: two real dinspect bugs (an unbounded TSC-calibration hang leaving a stale Am5x86-era report behind, then RDTSC itself faulting under EMM386 on this part once the hang was fixed) -- confirmed three independent ways (fixed dinspect, an independent CPUID dump, and PhoenixBIOS's own POST text via the rig's hardware camera) that this is genuinely Intel Pentium OverDrive, ~83MHz. Completes the CPU-tier round (all four CPUs now have a Mach64 datum). See `docs/benchmarks/mach64-215ct-pod83-2026-09-03.md`. |
 
 ### Mach64 gate -- do this before treating any Mach64 number as a datum
 
