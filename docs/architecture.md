@@ -9,7 +9,7 @@ game engine (per-port, e.g. NXEngine-evo for doskutsu)
       |
 SDL3 / SDL3_mixer / SDL3_image
       |
-SDL3 DOS backend  <- shared/patches/sdl3-dos/
+SDL3 DOS backend  <- patches/SDL/ (port's own vendored copy, seeded from shared/patches/sdl3-dos/)
       |
 DJGPP + CWSDPMI
       |
@@ -55,7 +55,7 @@ scripting VMs — not video-mode or audio-hardware plumbing).
 |---|---|---|
 | Game data | port repo, user-supplied, never committed | no |
 | Game engine | port repo, vendored + pinned SHA | port repo's own `patches/<engine>/` |
-| SDL3 / SDL3_mixer / SDL3_image | upstream `libsdl-org`, pinned SHA | `shared/patches/sdl3-dos/`, `shared/patches/sdl3-mixer/` |
+| SDL3 / SDL3_mixer / SDL3_image | upstream `libsdl-org`, pinned SHA | port's own vendored `patches/SDL/`, `patches/SDL_mixer/` (seeded once from `shared/patches/sdl3-dos/`, `shared/patches/sdl3-mixer/` at scaffold time -- see `docs/patch-conventions.md`) |
 | DJGPP / CWSDPMI | toolchain, not vendored | not patched |
 | MS-DOS | target OS | not patched |
 

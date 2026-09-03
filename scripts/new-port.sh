@@ -74,9 +74,31 @@ git subtree add --prefix=.sdl-dos-ports -q "$HUB_REMOTE" main --squash || {
 echo "==> Creating directory skeleton"
 mkdir -p vendor patches scripts tests qa-results setup profiles .claude/agents .claude/skills
 
-echo "==> Wiring shared SDL3-DOS patch series into patches/ (symlinks)"
-ln -s ../.sdl-dos-ports/shared/patches/sdl3-dos patches/SDL
-ln -s ../.sdl-dos-ports/shared/patches/sdl3-mixer patches/SDL_mixer
+echo "==> Wiring scripts/ convenience symlinks into .sdl-dos-ports/shared/scripts/"
+# Matches the existing convention in doskutsu and dossage: PORTING.md and
+# this script's own closing message tell an operator to run
+# ./scripts/setup-symlinks.sh and ./scripts/fetch-sources.sh directly, so
+# those need to exist from the first commit, not just be reachable via the
+# longer .sdl-dos-ports/shared/scripts/ path.
+ln -s ../.sdl-dos-ports/shared/scripts/fetch-sources.sh scripts/fetch-sources.sh
+ln -s ../.sdl-dos-ports/shared/scripts/apply-patches.sh scripts/apply-patches.sh
+ln -s ../.sdl-dos-ports/shared/scripts/setup-symlinks.sh scripts/setup-symlinks.sh
+ln -s ../.sdl-dos-ports/shared/scripts/verify-patches-applied.sh scripts/verify-patches-applied.sh
+
+echo "==> Vendoring the SDL3-DOS patch series into patches/ (real files, not symlinks)"
+# A new port gets its OWN copy of the hub's current patch series -- this is
+# a one-time seed, not an ongoing link. The copy is real, port-owned files
+# from the start (never symlinked into .sdl-dos-ports/), so `git clone` of
+# just this port repo builds standalone -- no subtree/submodule reach-back
+# needed for patches specifically, only for the rest of shared/ (build
+# fragments, runmanifest.h, midi_sched, agents, tools). A later hub
+# improvement to the reference series does not reach an already-scaffolded
+# port automatically; porting it over is a deliberate, reviewed act, same
+# as porting a fix between any two independent repos. See
+# docs/patch-conventions.md.
+mkdir -p patches/SDL patches/SDL_mixer
+cp "$HUB_DIR"/shared/patches/sdl3-dos/*.patch patches/SDL/
+cp "$HUB_DIR"/shared/patches/sdl3-mixer/*.patch patches/SDL_mixer/
 
 # VCCTRL_REMOTE follows the same override convention as other hub-location
 # vars in this codebase (EMULATORS_ROOT, SDL_DOS_PORT_ROOT) -- set it if
@@ -152,12 +174,13 @@ cat > vendor/sources.manifest <<'EOF'
 # Format: <name>  <url>  <ref>  <sha>
 # See .sdl-dos-ports/docs/patch-conventions.md.
 #
-# This port vendors its OWN copy of SDL/SDL_mixer/SDL_image (shared/ only
-# carries the DOS patch series, not the vendored source -- see
-# .sdl-dos-ports/docs/architecture.md). Fill in real pinned SHAs for the
-# three entries below (match whatever SHA the shared SDL3-DOS patch series
-# in .sdl-dos-ports/shared/patches/sdl3-dos/ was built against -- check its
-# README/patch headers), and add this port's own engine as a fourth entry.
+# This port vendors its OWN copy of SDL/SDL_mixer/SDL_image source, AND
+# its own copy of the DOS patch series (patches/SDL, patches/SDL_mixer --
+# real files, seeded once from the hub at scaffold time, not symlinked --
+# see .sdl-dos-ports/docs/patch-conventions.md). Fill in real pinned SHAs
+# for the three entries below (match whatever SHA patches/SDL's own patch
+# headers/README were built against), and add this port's own engine as a
+# fourth entry.
 SDL            https://github.com/libsdl-org/SDL.git          main          PIN_ME
 SDL_mixer      https://github.com/libsdl-org/SDL_mixer.git    release-3.2.x PIN_ME
 SDL_image      https://github.com/libsdl-org/SDL_image.git    release-3.2.x PIN_ME

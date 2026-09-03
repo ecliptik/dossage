@@ -32,7 +32,7 @@ own `docs/internal/`, not to a shared template).
 | File | Role | Reusable as-is vs. needs a per-port fill-in |
 |---|---|---|
 | `team-lead.md` | Wave/phase coordinator, gate decisions, specialist arbitration | Fill in your specialist roster and doc paths |
-| `sdl-engine.md` | Owns `shared/patches/sdl3-dos/` (or your port's local copy of it) | Reusable close to as-is — this patch set is shared |
+| `sdl-engine.md` | Owns this port's own vendored `patches/SDL/` (seeded once from `shared/patches/sdl3-dos/` at scaffold time, not a live link) | Reusable close to as-is |
 | `ENGINE-SPECIALIST.md.template` | Owns your game engine's own patches | Fill in engine name, source paths, file-format specifics |
 | `build-qa.md` | Cross-build + DOSBox-X smoke + visual A/B | Fill in your binary name and expected banner/log lines |
 | `realhw.md` | Release packaging + real-hardware handoff | Fill in transfer mechanism (vcctrl by default — see `docs/hardware-testing.md`) and BAT/launcher naming |

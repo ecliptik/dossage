@@ -16,22 +16,36 @@ from day to day.
 | `dos-rig-operations/` | Day-to-day rig mechanics independent of a full campaign: input-injection landed-vs-dropped detection, screen-capture evidence discipline, file transfer + packaging/handoff, log collection, power management, and multi-agent coordination (a spawned specialist doesn't inherit rig access; single-coordinator-per-campaign to prevent double-dispatch) | Reusable as-is -- mostly points at vcctrl's own `vcctrl-rig-hazards`/`vcctrl-common-workflows` for mechanics and adds the port-session framing/hazard classes on top |
 | `dos-realhw-verification/` | Knowing a build/fix/diagnosis is actually correct on real hardware, not just apparently correct: two-witness build verification, stale-cache failure shapes, DOSBox-X/86Box tiering, build-host tooling traps, real-hardware-vs-emulator divergence debugging | Reusable as-is -- the epistemics (what a check's failure would look like) and failure-shape catalog are port-agnostic; the worked examples are illustrative, not something to copy literally |
 | `dos-emulator-workflow/` | Local, no-rig-required DOSBox-X development: which of the three `shared/tools/dosbox-*.sh` scripts to reach for, the emulator-only escape hatches already baked into the shipped confs (and why they must never reach real hardware), the "necessary but not sufficient" pattern for a probe that can only partially answer a hardware question locally, and local-timing observation vs. an actual performance claim | Reusable as-is for the tooling/mechanics and the DOSBox-X/hardware boundary; the shipped `.conf` files' own `cycles=`/video/sound calibration is one port's reference-machine numbers, not a universal setting -- re-calibrate for your own port |
-| `review/` | Checking a patch (`shared/patches/` or a port's own `patches/<engine>/`) against this hub's landing conventions before committing: provenance verification, DJGPP hard constraints, neutral naming, slot numbering, temporary-diagnostic removal planning | Reusable as-is -- invoke as `/review` once symlinked in |
+| `review/` | Checking a patch (a port's own vendored `patches/SDL/`, `patches/<engine>/`, or this hub's own `shared/patches/` reference series) against this hub's landing conventions before committing: provenance verification, DJGPP hard constraints, neutral naming, slot numbering, temporary-diagnostic removal planning | Reusable as-is -- invoke as `/review` once symlinked in |
 | `benchmark/` | Running a real-hardware performance KPI campaign: KPI writing, team shape, investigation/rig discipline, recording the result | Reusable as-is -- invoke as `/benchmark` once symlinked in |
 
 ## Adopting a skill into a port repo
 
-**Preferred, self-contained: `npx skills`.** New port repos get every
+**Want `/sdldos:review` instead of `/review`?** This hub is also a real
+Claude Code plugin (`.claude-plugin/plugin.json`, name `sdldos`) -- install
+it once (`/plugin marketplace add <this repo's URL>` then `/plugin
+install sdldos@sdl-dos-ports`) and every skill below is available
+everywhere under that colon-namespaced prefix, no per-repo install step.
+The plugin's own `skills/` directory is just symlinks back into
+`.claude/skills/port` and the entries below -- one source of truth either
+way. See the root `README.md`'s "Prefer namespaced invocation?" section
+for the exact commands. The rest of this section covers the other path:
+per-repo, flat-named, via `npx skills`.
+
+**Preferred for a port repo, self-contained: `npx skills`.** New port repos get every
 current entry from this hub *and* vcctrl automatically --
 `scripts/new-port.sh` runs `npx skills add <repo> --full-depth --all -a
 claude-code` against both at scaffold time (verified working over Forgejo,
 HTTPS or SSH; `--full-depth` is required since neither repo has a
 root-level `SKILL.md`). No subtree/submodule symlink needed for skills
-specifically -- only the actual platform code (`shared/patches/`,
-`shared/build/`, `shared/include/runmanifest.h`, `shared/agents/`) still
-needs `.sdl-dos-ports/` (a subtree by default since 2026-08-31, a
-submodule for an older port), since `npx skills` only moves `SKILL.md`
-content. A port that already has skills installed this way picks up new
+specifically -- and no `.sdl-dos-ports/` reach-back needed for patches
+either any more (`patches/SDL`, `patches/SDL_mixer` are vendored real
+files, seeded once at scaffold time -- see `docs/patch-conventions.md`).
+The rest of the actual platform code (`shared/build/`,
+`shared/include/runmanifest.h`, `shared/agents/`) still needs
+`.sdl-dos-ports/` (a subtree by default since 2026-08-31, a submodule
+for an older port), since `npx skills` only moves `SKILL.md` content. A
+port that already has skills installed this way picks up new
 ones with `npx skills update`.
 
 **Skills are knowledge; real-hardware access is a separate, deliberate

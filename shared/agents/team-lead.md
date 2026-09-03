@@ -42,8 +42,9 @@ milestone state.
 
 ## Specialists you coordinate
 
-- **sdl-engine** -- `shared/patches/sdl3-dos/` (the shared SDL3 DOS
-  backend, consumed via subtree or submodule).
+- **sdl-engine** -- this port's own vendored `patches/SDL/` (the SDL3 DOS
+  backend, seeded once from the hub at scaffold time, not a live link to
+  it).
 - **<engine>-engine** (from `ENGINE-SPECIALIST.md.template`) -- this
   port's own `patches/<engine>/`.
 - **build-qa** -- cross-build + DOSBox-X smoke + visual A/B.

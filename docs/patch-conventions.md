@@ -24,64 +24,39 @@ patches/<vendor>/NNNN-short-description.patch
   Don't bundle an unrelated fix into a patch whose subject describes
   something else.
 
-## Shared series vs. a port-local overlay: the actual decision, not "which file does it touch"
+## Patches are vendored per-port, not shared
 
-A patch for a *shared* vendor (SDL, SDL_mixer) has two possible homes,
-and the fault line between them is **reusable-fix vs. disposable-
-instrumentation, never which subsystem the patch happens to touch**:
+Every port owns a real, standalone copy of `patches/<vendor>/` for
+*every* vendor, including a shared one like SDL/SDL_mixer.
+`scripts/new-port.sh` seeds `patches/SDL/` and `patches/SDL_mixer/` with
+a one-time copy of this hub's current series at scaffold time -- real
+files, never a symlink into `.sdl-dos-ports/` -- so a plain `git clone`
+of a port repo builds standalone: no hub reach-back needed for patches
+specifically, even though the rest of `shared/` (build fragments,
+`runmanifest.h`, `midi_sched`, agent charters, tools) still comes in via
+the `.sdl-dos-ports/` subtree/submodule as before.
 
-- **`shared/patches/<vendor>/`** (this hub's own numbered series, symlinked
-  into every port as `patches/<vendor>/`): a genuine platform fix (a
-  chip/hardware quirk any port could hit), or diagnostic tooling worth
-  keeping hint-gated for the *next* investigation, not just this one.
-- **A port's own `patches/<vendor>-local/`** (real, port-owned, never
-  symlinked, own independent `NNNN` numbering unrelated to the shared
-  series): a temporary, single-investigation diagnostic or workaround
-  that only this port needs. Applied by `apply-patches.sh` *after* the
-  shared series, against the same vendor tree -- see that script's own
-  header comment for the mechanics.
+This hub's own `shared/patches/sdl3-dos/` and `shared/patches/sdl3-mixer/`
+stay put as a **reference library a new port scaffolds from**, not an
+authoritative series existing ports track. There is no ongoing sync: a
+hub improvement made after a port is scaffolded does not reach that port
+automatically. Getting a fix from one repo to another -- port to hub
+(so the *next* new port gets it by default), hub to an
+already-scaffolded port, or port to port -- is always a deliberate,
+reviewed act, exactly like porting a fix between any two independent
+repos, because that is now what they are. See "When a port discovers a
+shared/-relevant fix" below for the actual mechanics of that act.
 
-**Ask "would the next investigation on a different port want this?", not
-"is this a diagnostic?" and not "which file does it touch."** Both wrong
-questions fail on real boundary cases from this hub's own history:
+A temporary, single-investigation diagnostic or workaround is just
+another numbered patch in a port's own `patches/SDL/` now -- there is no
+separate shared-vs-local distinction to make. It still needs its removal
+planned at landing time; see that section below, which applies uniformly
+now rather than only to the hub's own series.
 
-- A patch touching a genuinely shared file (the timer backend, say) is
-  still local-overlay material if it only exists to answer one port's
-  one question -- a real instance of exactly this shipped in the shared
-  series by mistake, cost every port pinning past it a measured per-frame
-  tax, and needed a whole second patch just to remove. "Which file does
-  it touch" would not have caught this; the file was legitimately shared
-  platform code.
-- A set of diagnostic probes built during one chip's investigation
-  (bank-switch chunk-content/readback, CRTC-register dumps, VBE
-  scan-line-length checks) correctly stayed in the shared series, hint-
-  gated and zero-cost when unset, specifically because they're reusable
-  chip-agnostic tooling the next real-hardware-only video symptom would
-  also want -- "is this a diagnostic?" would have wrongly sent these
-  local.
-
-If you're not sure which side a patch is on, default to local-overlay:
-it costs nothing to promote a proven-reusable local patch into the
-shared series later (a real `git format-patch`, reviewed, given the next
-free shared slot), and it's much cheaper than removing a mistakenly-
-shared one after other ports have already pinned past it.
-
-**A local overlay is transient state, not a permanent part of a port's
-build -- delete it when the investigation that needed it closes.**
-`apply-patches.sh` applies every `*.patch` file in `patches/<vendor>-
-local/` unconditionally; there's no disabled-but-present state short of
-the file's absence. A temporary diagnostic left in a local overlay
-silently taxes every subsequent build of *that one port* forever,
-including whatever build a benchmark result or a release gets cut
-from -- the exact hazard the shared-series removal-planning rule above
-exists to prevent, just scoped down to a single port instead of every
-port, which paradoxically makes it easier to leave behind: no other
-port's numbers will ever flag it. Verified by real migration test
-(2026-08-31, dossage/Passage retrofitting a since-removed shared
-diagnostic as a local overlay): removing the overlay file is one command
-and restores the tree exactly. Before treating any benchmark or release
-build as final, confirm `patches/<vendor>-local/` is empty or that
-anything left in it is deliberate and documented, not forgotten.
+(This replaced an earlier shared-series-plus-`patches/<vendor>-local/`-
+overlay design, retired 2026-09-01 in favor of full per-port vendoring
+so a port never depends on the hub to build. If you need the old
+design's reasoning, it's in this file's git history.)
 
 ## Commit / patch subject
 
@@ -123,52 +98,51 @@ anything new.
 
 ## When a port discovers a shared/-relevant fix or lesson
 
-A port's own `patches/SDL` and `patches/SDL_mixer` directories are
-symlinks into `.sdl-dos-ports/shared/patches/sdl3-dos`/`sdl3-mixer` (set
-up by `scripts/new-port.sh`) — a port session editing a file under
-`patches/SDL/` is editing files inside the hub's own subtree content,
-merged directly into the port repo's own git history (or, for a port
-scaffolded before 2026-08-31, inside a submodule that's a full clone with
-the same remote as this repo itself). A subtree-based change can be
-pushed back to the hub with `git subtree push --prefix=.sdl-dos-ports
-<hub-remote> <branch>`; a submodule-based one can be committed and pushed
-directly from inside the submodule checkout. Don't do either as a first
-move, for the same reason concurrent, uncoordinated writes to any shared
-resource are
-risky: `shared/`'s own rules (nothing game-specific, neutral naming,
-build + validate under DOSBox-X before considering it done, fix forward
-with a new patch number rather than editing patch history for anything
-behavioral) need to actually be checked against, and a port session
-mid-investigation is optimizing for "unblock my own port," not for "is
-this correct for every future port."
+A port's `patches/SDL` and `patches/SDL_mixer` are that port's own real,
+vendored files (seeded once at scaffold time, never symlinked) — editing
+them only ever changes that one port's own patch series, never the
+hub's. There is no `git subtree push` or submodule-commit path for
+patches specifically any more (the rest of `shared/` still works that
+way; just not `patches/`). Getting something shared/-relevant into the
+hub is always a separate, explicit act:
 
 **The pattern that works** (developed across doskutsu/dossage's real
-cross-port collaboration, not yet exercised as a fully-autonomous
-port-pushes-directly flow): a port session that finds something
-shared/-relevant — a real bug in `shared/`'s own code, a hazard worth
+cross-port collaboration): a port session that finds something
+shared/-relevant — a real bug in the platform layer, a hazard worth
 documenting for every port, a piece of methodology worth reusing —
 reports it to whichever session is coordinating the hub (with enough
-detail to verify, not just a conclusion: file/patch citations, the actual
-evidence, what's confirmed vs. inferred). The hub-side session verifies
-it against the actual current state of `shared/` (never take a summary on
-faith — this hub's own history already includes a case where an
-unverified secondhand relay would have shipped a subtly wrong hazard
-writeup), authors the fix or the doc addition following this file's own
-conventions, runs the same validation any `shared/` change needs (a full
-patch-series replay against the pinned upstream SHA from a clean reset,
-not just a diff read), and commits it here. Every consuming port then
-bumps its `.sdl-dos-ports` pin and picks it up.
+detail to verify, not just a conclusion: the port's own patch file or
+diff, the actual evidence, what's confirmed vs. inferred). The hub-side
+session verifies it against the actual current state of
+`shared/patches/` (never take a summary on faith — this hub's own
+history already includes a case where an unverified secondhand relay
+would have shipped a subtly wrong hazard writeup), re-derives a real
+`git format-patch` against the hub's own series rather than
+hand-transcribing whatever the port session sent over (see "Verify
+provenance" below), runs the same validation any `shared/` change needs
+(a full patch-series replay against the pinned upstream SHA from a clean
+reset, not just a diff read), gives it the next free slot in the hub's
+own series, and commits it here.
+
+**This updates the hub's reference copy for the *next* new port. It does
+not reach any port already scaffolded.** A port that wants a fix landed
+in the hub after it scaffolded has to pull it in by hand — copy the new
+patch file(s) into its own `patches/SDL/` (or `SDL_mixer/`), same as
+adopting a fix found in any other independent repo. There's no pin to
+bump for patches specifically any more.
 
 This applies to genuine fixes (a real bug in SDL3-DOS backend code, like
 patch `0127`'s hardcoded-path fix) and to documentation/methodology (a
 real-hardware hazard worth every port knowing, like the video/audio
 hazard catalogs in `docs/video.md`/`docs/audio.md`) equally — "feedback"
 flowing back is as much a first-class case as a patch is, not an
-afterthought. A port's own engine-specific patches (`patches/<engine>/`)
+afterthought; the doc/methodology side of this was never coupled to the
+patches-symlink mechanism and is unaffected by patches now vendoring
+per-port. A port's own engine-specific patches (`patches/<engine>/`)
 essentially never belong in `shared/` by `CLAUDE.md`'s own "nothing
 game-specific" rule — the cases above are specifically about a port
-discovering something true about the *shared* layer or the *platform*
-while working on its own engine, not about promoting engine code itself.
+discovering something true about the *shared* platform layer while
+working on its own engine, not about promoting engine code itself.
 
 ## Two gotchas beyond the basics above
 
@@ -251,14 +225,11 @@ peer-authored patch in `shared/patches/`:
 
 ## A temporary diagnostic patch needs its removal planned at landing time
 
-**This section's own real instance is now the canonical example of why
-"shared series vs. local overlay" (above) exists — read that section
-first if you're deciding where a new diagnostic should land.** What
-follows describes what actually had to happen because a genuinely
-single-port diagnostic landed in the shared series instead of a local
-overlay; a port on this convention going forward has `patches/<vendor>-
-local/` for exactly this case, and the mistake described below shouldn't
-recur.
+**This applies wherever a diagnostic patch lands now** — the hub's own
+`shared/patches/` (reference-copy landings, reviewed the same as any
+other patch here) and a port's own `patches/SDL/` alike, now that every
+port's series is real, vendored files rather than a shared symlink. What
+follows is the real incident that established the rule.
 
 A diagnostic patch landed in `shared/` — gated or not, cheap or not —
 becomes a permanent, silent tax on every port that pins past it the
