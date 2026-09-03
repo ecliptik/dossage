@@ -12,14 +12,19 @@ vendors, or ships. Kept in sync with `vendor/sources.manifest`.
 | [Passage](https://github.com/jasonrohrer/Passage) | `master` @ `2f713f2` | **public domain** | Yes (statically linked + data) | The game itself, by Jason Rohrer (2007) |
 | [minorGems](https://github.com/jasonrohrer/minorGems) (subset) | `master` @ `ef42b1c` | **public domain** | Yes (statically linked) | File/path, string, settings, time, thread, sha1, TGA-decode utility subset |
 | [SDL3](https://github.com/libsdl-org/SDL) | `main` @ `74a7462` (post-[PR #15377](https://github.com/libsdl-org/SDL/pull/15377)) | zlib | Yes (statically linked) | Platform abstraction + DOS backend |
-| [SDL3_mixer](https://github.com/libsdl-org/SDL_mixer) | `release-3.2.x` @ `e69654e` | zlib | Yes (statically linked) | Audio device/stream plumbing (Passage's own synth drives the samples; no file-decode codec is used) |
 | [DJGPP libc](https://www.delorie.com/djgpp/) | 2.05+ (via GCC 12.2.0) | **GPL + runtime-library exception** | Yes (statically linked) | C runtime on DOS |
 | [CWSDPMI](https://sandmann.dotster.com/cwsdpmi/) | TBD (not yet vendored) | **freeware, redistribution permitted** | Yes (separate .exe, not linked) | DPMI host |
 | [DOSBox-X](https://dosbox-x.com/) | system package | GPLv2 | No (dev-only) | Pre-hardware testing emulator |
 
-Note: **SDL3_image is not vendored** -- Passage's `.tga` graphics are
-decoded by minorGems' own `TGAImageConverter`, so there is nothing for it
-to do here.
+Note: **neither SDL3_mixer nor SDL3_image is vendored, linked, or
+shipped** -- Passage's `.tga` graphics are decoded by minorGems' own
+`TGAImageConverter`, and its audio is a from-scratch software synth
+driving core SDL3's `SDL_OpenAudioDeviceStream` directly, so neither
+library has anything to do here. Both are absent from
+`vendor/sources.manifest` (which documents the reasoning per library)
+and from the link line; see the `Makefile` header. They are listed
+nowhere below because a component this port does not ship carries no
+attribution obligation.
 
 ---
 
@@ -29,7 +34,7 @@ to do here.
 
 Unlike doskutsu (whose `DOSKUTSU.EXE` is GPLv3 because it statically links
 GPLv3 NXEngine-evo), `DOSSAGE.EXE` links only public-domain (Passage,
-minorGems) and zlib-licensed (SDL3, SDL3_mixer) code, plus DJGPP libc
+minorGems) and zlib-licensed (SDL3) code, plus DJGPP libc
 (GPL with a runtime-library exception that explicitly permits static
 linking without imposing GPL on the result). There is no GPL-proper
 component in the link line, so nothing forces the combined binary under a
@@ -39,8 +44,8 @@ copyleft license.
 
 - This repo's own source (build system, scripts, docs, patch headers) --
   **MIT**.
-- `patches/SDL/*.patch`, `patches/SDL_mixer/*.patch` -- derivatives of
-  zlib-licensed upstreams, therefore zlib.
+- `patches/SDL/*.patch` -- derivatives of a zlib-licensed upstream,
+  therefore zlib.
 - `patches/passage/*.patch`, `patches/minorgems/*.patch` -- derivatives of
   public-domain upstreams. A derivative of public-domain work carries no
   restriction; these patches are effectively public domain too, and in any
@@ -104,23 +109,6 @@ Cave Story's freeware-but-not-redistributed data in doskutsu. See
   possible.
 - **Modifications:** this repo's own `patches/SDL/` series (real,
   vendored files -- not a live link to `sdl-dos-ports`).
-
-### SDL3_mixer (release-3.2.x)
-
-- **License:** zlib
-- **Source:** https://github.com/libsdl-org/SDL_mixer
-- **Pinned ref:** `release-3.2.x` @ `e69654e9eac6d07ec5dfb9d9db022e836d3d1e11`
-- **Role:** Audio device/stream plumbing. Passage's own software synth
-  drives raw samples directly -- no WAV/OGG/MP3/MIDI file-decode path is
-  used from this library.
-- **Modifications:** none currently -- this repo has no `patches/SDL_mixer/`
-  (no symlink, no vendored copy). <!-- FLAGGED 2026-09-01: this section
-  reads as unadapted boilerplate; dossage's own patches/ has no
-  SDL_mixer entry and vendor/sources.manifest doesn't pin an SDL_mixer
-  SHA either -- worth dossage's own session confirming whether this
-  section (and the pinned ref above) should be removed entirely rather
-  than left inaccurate. -->
-
 
 ### DJGPP libc
 

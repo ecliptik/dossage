@@ -50,13 +50,22 @@ public-domain work carries no restriction).
 
 Notes: n/a.
 
-## SDL3 / SDL3_mixer + `shared/patches/`
+## SDL3 + this repo's `patches/SDL/`
 
-License: zlib (see sdl-dos-ports' `THIRD-PARTY.md`). SDL3_image is **not**
-needed for this port -- Passage's `.tga` assets are decoded by minorGems'
-own `TGAImageConverter`, not SDL_image.
+License: zlib (see sdl-dos-ports' `THIRD-PARTY.md`). The patch series is
+a derivative of a zlib-licensed upstream and is therefore zlib itself.
 
-Notes: n/a.
+Neither **SDL3_mixer** nor **SDL3_image** is vendored, linked, or shipped
+by this port, so neither carries an attribution obligation here: Passage's
+`.tga` assets are decoded by minorGems' own `TGAImageConverter`, and its
+audio is a from-scratch software synth driving core SDL3's
+`SDL_OpenAudioDeviceStream` directly. See `vendor/sources.manifest`'s
+per-library NOTE entries for the reasoning, and `THIRD-PARTY.md`.
+
+Notes: as of 2026-09-01 `patches/SDL/` is this repo's own vendored copy
+of the series, not a symlink into `.sdl-dos-ports/shared/patches/`
+(sdl-dos-ports moved to per-port vendoring). That changes who owns the
+files, not their license -- still a zlib derivative either way.
 
 ## Game assets
 
