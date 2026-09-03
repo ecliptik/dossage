@@ -1,4 +1,4 @@
-From 9dbed8019386a9fe15c237294717edd4a20c4d34 Mon Sep 17 00:00:00 2001
+From 73abdea53978f11f925a7e3238321c7395941123 Mon Sep 17 00:00:00 2001
 From: Micheal Waltz <micheal@ecliptik.com>
 Date: Wed, 2 Sep 2026 19:43:20 -0700
 Subject: [PATCH] dos: percentile fps telemetry (RUNMANIFEST fps_p50/fps_p95)
@@ -24,40 +24,75 @@ What this adds, in playGame():
   uses, sort the captured buffer and take fps_p50 = 1/sorted[floor(0.50
   * (n-1))], fps_p95 = 1/sorted[floor(0.95 * (n-1))]. Left at
   runmanifest_init()'s -1.0 NA sentinel when the buffer is empty (n==0),
-  rather than dividing by zero; same NA fallback if the specific sample
-  at a percentile index happens to be exactly 0.0.
+  rather than dividing by zero.
 
   The inversion is deliberate, not a bug: p95 is taken over per-frame
   TIME, so it names the slow tail (95% of frames were at least this
   fast, 5% were slower), which inverts to the LOW end of the fps range,
-  below p50 -- not above it. Getting this backwards (e.g. by taking the
-  95th percentile of instantaneous-fps values directly) is exactly the
-  sign-of-the-metric bug this work item exists to avoid.
+  below p50 -- not above it.
 
 - Emit a RUNMANIFEST block (schema v1) to RUNMANI.LOG via
-  runmanifest_emit(), alongside (not replacing) the existing printf --
-  other tooling may already grep the old prints. Fields filled from real
-  data: schema_version, environment (runmanifest_detect_environment(),
-  DJGPP-only), binary_sha12 (from the new PORT_BUILD_SHA12 macro, a
-  companion Makefile change -- inert here without a reader, and this
-  patch is inert without something to read; landed together as one
-  concern per the hub's patch-conventions.md), duration_s (the existing
-  netTime), exit_code (0, since this is the one clean-exit path this
-  hooks), fps_p50, fps_p95. started_utc is deliberately left at its
-  empty-string default: real DOS has no reliable UTC without a config
-  step this port doesn't have, and the schema treats "" as "field
-  present, empty" rather than a false claim. wave_tag/scene/
-  env_block_sha/audio_vital_status/regime and the banner/critical/warn
-  counters stay at runmanifest_init()'s NA/0/empty defaults for the same
-  reason -- dossage has no infra to populate those honestly yet.
+  runmanifest_emit(), alongside (not replacing) the existing printf.
+  Fields filled from real data: schema_version, environment
+  (runmanifest_detect_environment(), DJGPP-only), binary_sha12 (from the
+  new PORT_BUILD_SHA12 macro, a companion Makefile change), duration_s
+  (the existing netTime), exit_code (0, the one clean-exit path this
+  hooks), fps_p50, fps_p95. Everything else (started_utc, wave_tag,
+  scene, env_block_sha, audio_vital_status, regime, banner/critical/warn
+  counters) stays at runmanifest_init()'s NA/0/empty defaults -- dossage
+  has no infra to populate those honestly yet.
 
-Scope: the sample buffer and its percentile computation are scoped
-identically to the existing frameCount/startTime/average-fps print they
-sit beside -- one playGame() call (one life), not the whole
-SDL_Init()..SDL_Quit() session. mainFunction()'s while(playGame()) loop
-can invoke playGame() many times per run, and the existing average print
-already re-fires on every one of those returns, so the new percentile
-block matches that existing scope rather than inventing a different one.
+Reject implausible frame-time samples before they reach the percentile
+buffer (added after a build-qa DOSBox-X smoke run on an earlier version
+of this patch caught it for real):
+
+A natural 298s life (age -> death -> fade) came back with
+fps_p50=13114403.96 -- a nonsensical ~13 million fps, i.e. the sorted
+sample at the p50 index was ~7.6e-8s (76ns). frameTimeSampleCount
+matched frameCount exactly (4475), ruling out a double-sampling or
+count-mismatch bug -- every captured sample corresponds to a real
+counted frame. That means roughly half of ALL captured frame-time
+samples in that life were reading as near-zero.
+
+Ruled out, by direct calculation, not assumption: pure floating-point
+rounding of Time::getCurrentTime()'s millisecond-quantized inputs
+(currentTimeS + currentTimeMS/1000.0, both integer-valued components)
+cannot produce a standalone nonzero result smaller than a genuine
+millisecond-scale difference -- simulating the actual arithmetic across
+every possible whole-millisecond pairing near a realistic epoch value
+only ever yields exactly 0.0 (identical inputs) or the real, correctly-
+scaled difference. A 40-70ms real per-frame duration (documented
+repeatedly elsewhere in this file via direct real-hardware measurement)
+cannot collapse to 76ns through float noise alone.
+
+Leading hypothesis, not yet confirmed by a dedicated probe: this file's
+own pacer history already documents DJGPP's timekeeping as capable of
+losing ticks under insufficient yielding -- the reverted busy-wait
+experiment commented on above measured time(NULL) itself advancing only
+41s across a ~90s run (54% of ticks lost) when the loop stopped
+yielding. Time::getCurrentTime() likely derives from the same
+periodically-serviced BIOS tick counter. A stalled tick would read back
+near-identical to the previous call (near-zero delta), then "catch up"
+on the next real tick (a compensating large delta) -- exactly the
+alternation implied by the data (frameCount/netTime's coarse average
+stayed a normal 15.017fps across the whole 298s life, meaning the large
+compensating frames account for essentially all of the real elapsed
+time). This needs a standalone probe (isolated gettimeofday() call-rate
+characterization, not embedded in the full game) to confirm rather than
+infer from the game's own aggregate behavior -- flagged, not
+investigated further here.
+
+The fix here is deliberately narrow and independent of which hypothesis
+is right: Time::getCurrentTime() truncates to whole milliseconds
+(TimeDOS.cpp's tv_usec/1000, see the pacer's own comment on this a few
+lines up), and no real frame here can do render + audio-pump + game
+logic work in under a millisecond -- so any captured delta that is <= 0
+or below one clock tick is definitionally not a measurement of real
+work, regardless of why the clock produced it. Such samples are now
+excluded from the percentile buffer rather than corrupting it, and
+counted (not silently dropped) via a new printf alongside the existing
+average-fps print, so a lopsided reject count stays visible data for
+whoever looks at the next run's output rather than a hidden correction.
 
 Only the one clean-exit path is covered, matching the existing average
 print's own single call site -- catching every abnormal exit is out of
@@ -66,14 +101,14 @@ scope for this patch.
 Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01ULWUsqCW7jJL5TdiFQMJwf
 ---
- gameSource/game.cpp | 101 ++++++++++++++++++++++++++++++++++++++++++--
- 1 file changed, 97 insertions(+), 4 deletions(-)
+ gameSource/game.cpp | 154 ++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 149 insertions(+), 5 deletions(-)
 
 diff --git a/gameSource/game.cpp b/gameSource/game.cpp
-index 7034511..dc9bead 100644
+index 7034511..270d5cd 100644
 --- a/gameSource/game.cpp
 +++ b/gameSource/game.cpp
-@@ -52,6 +52,30 @@ int main( int inArgCount, char **inArgs ) {
+@@ -52,6 +52,55 @@ int main( int inArgCount, char **inArgs ) {
  #include "minorGems/util/stringUtils.h"
  #include "minorGems/util/SettingsManager.h"
  
@@ -87,6 +122,31 @@ index 7034511..dc9bead 100644
 +// planned benchmark run. Capture stops rather than overflowing if a run
 +// somehow exceeds this.
 +#define DOS_PORT_FRAME_TIME_SAMPLE_CAP 20000
++
++// DOS-PORT: floor below which a captured frameTime cannot be a real
++// measurement, derived from the clock's own documented granularity
++// (Time::getCurrentTime() truncates to whole milliseconds -- TimeDOS.cpp's
++// tv_usec/1000, see the pacer's own comment on this above), not from any
++// assumption about how fast this game's per-frame work can get. A real
++// build-qa DOSBox-X run found roughly half of all captured samples in a
++// long life reading as low as ~7.6e-8s (a nonsensical ~13 million fps) --
++// confirmed by direct calculation that pure floating-point rounding of
++// two millisecond-quantized instants cannot produce a nonzero result
++// smaller than a genuine millisecond-scale difference on its own, so a
++// value this far below one clock tick means the underlying clock read
++// something non-monotonic or stale, not that a frame actually ran in
++// under a microsecond. Leading hypothesis (not yet confirmed by a
++// dedicated probe): DJGPP's gettimeofday() derives from the same
++// periodically-serviced BIOS tick counter this file's own pacer history
++// already documents as capable of stalling under insufficient yielding
++// (see the reverted busy-wait experiment's comment above, which measured
++// time(NULL) itself losing 54% of ticks on real hardware) -- a stalled
++// tick would read back near-identical to the previous call, then "catch
++// up" on the next real tick, which would produce exactly this near-zero/
++// compensating-large alternation. Filtering rather than trusting these
++// blindly. 0.001s (1ms) matches that floor without needing to assume
++// anything about this game's own performance profile.
++#define DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S 0.001
 +
 +static int dosPortCompareFrameTimes( const void *inA, const void *inB ) {
 +    double a = *(const double *)inA;
@@ -104,7 +164,7 @@ index 7034511..dc9bead 100644
  
  
  // size of game image
-@@ -1082,7 +1106,22 @@ char playGame() {
+@@ -1082,7 +1131,29 @@ char playGame() {
  
      int frameCount = 0;
      unsigned long startTime = time( NULL );
@@ -123,12 +183,19 @@ index 7034511..dc9bead 100644
 +    // never read.
 +    static double frameTimeSamples[ DOS_PORT_FRAME_TIME_SAMPLE_CAP ];
 +    int frameTimeSampleCount = 0;
++
++    // Counts of samples excluded as implausible -- see
++    // DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S's own comment for why. Reported
++    // (not silently dropped) in this function's exit block, so a lopsided
++    // count is visible data rather than a hidden correction.
++    int frameTimeRejectedNonPositive = 0;
++    int frameTimeRejectedTooSmall = 0;
 +#endif
 +
      int titleFadeFrame = 0;
      int numTitleFadeFrames = 200;
  
-@@ -1541,7 +1580,17 @@ char playGame() {
+@@ -1541,7 +1612,25 @@ char playGame() {
          double newTimestamp = Time::getCurrentTime();
          
          double frameTime = newTimestamp - lastFrameTimeStamp;
@@ -138,7 +205,15 @@ index 7034511..dc9bead 100644
 +        // DOS-PORT: capture the real per-frame duration for the
 +        // RUNMANIFEST percentile computation, before any pacing/sleep
 +        // below adjusts anything -- see this function's exit block.
-+        if( frameTimeSampleCount < DOS_PORT_FRAME_TIME_SAMPLE_CAP ) {
++        // Reject implausible readings rather than trusting the clock
++        // blindly -- see DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S's own comment.
++        if( frameTime <= 0.0 ) {
++            frameTimeRejectedNonPositive ++;
++            }
++        else if( frameTime < DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S ) {
++            frameTimeRejectedTooSmall ++;
++            }
++        else if( frameTimeSampleCount < DOS_PORT_FRAME_TIME_SAMPLE_CAP ) {
 +            frameTimeSamples[ frameTimeSampleCount ] = frameTime;
 +            frameTimeSampleCount ++;
 +            }
@@ -147,9 +222,25 @@ index 7034511..dc9bead 100644
          double extraTime = 1.0 / lockedFrameRate - frameTime;
          
          // DOS-PORT: SDL_Delay, not Thread::staticSleep -- on DOS,
-@@ -2122,8 +2171,52 @@ char playGame() {
+@@ -2118,12 +2207,67 @@ char playGame() {
+     printf( "Frame rate = %f fps (%d frames)\n", 
+             frameRate, frameCount );
+ 
+-    printf( "Game time = %d:%d\n", 
++    printf( "Game time = %d:%d\n",
              (int)netTime / 60, (int)netTime % 60 );
  
++#ifdef __DJGPP__
++    // DOS-PORT: visible, not silent -- a lopsided reject count is itself
++    // a finding (see DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S's own comment),
++    // not something to correct quietly out of the percentile inputs.
++    printf( "Frame-time samples: %d used, %d rejected non-positive, "
++            "%d rejected below %.3fs\n",
++            frameTimeSampleCount, frameTimeRejectedNonPositive,
++            frameTimeRejectedTooSmall,
++            (double)DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S );
++#endif
++
      fflush( stdout );
 -    
 -    
