@@ -105,6 +105,7 @@ $(AUDIO_TIER_STAMP):
 
 GAME_CXXFLAGS := \
     -I$(VENDOR_DIR) \
+    -I$(HUB_DIR)/shared/include \
     -I$(SYSROOT)/include \
     -march=i486 -mtune=pentium -O2 -fno-rtti -fomit-frame-pointer \
     $(AUDIO_TIER_FLAGS) \
@@ -136,16 +137,14 @@ GAME_CXXFLAGS := \
 # if the staged data differs, so hash-verify the staged tree separately (the
 # pre-flight in docs/BENCHMARK-PLAN.md already says to).
 #
-# Deliberately NOT passed as -DPORT_BUILD_SHA12 into the compile. The hub's
-# convention (shared/skills/dos-hardware-validation/references/runmanifest-log.md)
-# has the binary emit this field into its own run log, so a rig log proves
-# which binary produced it. dossage has no runmanifest emission at all --
-# nothing would print the macro -- so compiling it in today would buy nothing
-# and cost a stale-object hazard (the .o rule keys on sources, not on flags;
-# cf. AUDIO_TIER_STAMP above, which exists for exactly that reason). Recording
-# it beside the binary is honest and useful now; wiring it into the engine is
-# a separate patches/passage/ change that would alter the binary, and so must
-# not land between a baseline and the run it anchors.
+# UPDATE (patches/passage/0034): now passed as -DPORT_BUILD_SHA12 into the
+# compile (see the GAME_CXXFLAGS += and BUILD_SHA12_STAMP below) -- the gap
+# this comment used to describe ("dossage has no runmanifest emission at
+# all, so compiling this in would buy nothing") is closed: game.cpp now
+# emits a RUNMANIFEST block at clean exit, reading this macro into the
+# block's binary_sha12 field. This DOES alter the binary, so it must not
+# land between a baseline build and the run it anchors -- same rule as
+# before, just satisfied now rather than deferred.
 BUILD_SHA12 := $(shell { \
     git -C $(VENDOR_DIR)/SDL        rev-parse HEAD^{tree}; \
     git -C $(VENDOR_DIR)/passage    rev-parse HEAD^{tree}; \
@@ -155,6 +154,36 @@ BUILD_SHA12 := $(shell { \
     sha256sum $(HUB_DIR)/shared/build/sdl3-dos.mk; \
     $(CXX) -dumpversion; \
   } 2>/dev/null | sha256sum | cut -c1-12)
+
+# DOS-PORT: compile the fingerprint into the binary, so a RUNMANIFEST block
+# emitted at runtime (patches/passage/0034) can self-report which build
+# produced it. Appended via += only AFTER BUILD_SHA12 is fully computed
+# above -- BUILD_SHA12's own shell recipe hashes GAME_CXXFLAGS's PRIOR
+# (pre-append) value, so baking the fingerprint into the very flags the
+# fingerprint hashes would be circular. Make evaluates a simply-expanded
+# (:=) variable's += using whatever the referenced variable already holds
+# at that point in the file, so this ordering is what makes it non-circular
+# -- moving this earlier than BUILD_SHA12's own assignment would break it.
+GAME_CXXFLAGS += -DPORT_BUILD_SHA12=\"$(BUILD_SHA12)\"
+
+# DOS-PORT: same stale-.o hazard AUDIO_TIER_STAMP (above) exists to prevent,
+# for a different variable -- the %.o pattern rule tracks sources, not
+# flags, so a BUILD_SHA12 change (e.g. a vendor patch landing) would
+# otherwise silently relink .o files still carrying the PREVIOUS
+# fingerprint, making a binary's own self-reported binary_sha12 a lie about
+# what produced it. Unlike AUDIO_TIER_STAMP's two fixed names, BUILD_SHA12
+# has unbounded possible values, so the stamp's filename embeds the hash
+# itself (goes stale, forcing a rebuild, exactly when BUILD_SHA12 changes)
+# rather than enumerating prior values to delete.
+BUILD_SHA12_STAMP := $(BUILD_DIR)/.build_sha12-$(BUILD_SHA12)
+
+$(GAME_OBJECTS): $(BUILD_SHA12_STAMP)
+
+$(BUILD_SHA12_STAMP):
+	mkdir -p $(BUILD_DIR)
+	rm -f $(BUILD_DIR)/.build_sha12-*
+	rm -f $(GAME_OBJECTS)
+	touch $@
 
 BUILD_SHA12_FILE := $(BUILD_DIR)/dossage.build-sha12
 

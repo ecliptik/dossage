@@ -1,0 +1,207 @@
+From 9dbed8019386a9fe15c237294717edd4a20c4d34 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Wed, 2 Sep 2026 19:43:20 -0700
+Subject: [PATCH] dos: percentile fps telemetry (RUNMANIFEST fps_p50/fps_p95)
+
+The hub's own benchmark skill requires a percentile-based KPI
+(fps_p50/fps_p95 via shared/include/runmanifest.h), and dossage could
+not produce one -- it only ever reported a single average
+(frameCount/netTime). That is not a formality: the closing campaign on
+the S3 ViRGE leg found a single average of 14.94 hiding a steady-state
+p50 of ~15.0 next to a much lower p95, and would have shown that on the
+very first run instead of after eight falsified hypotheses had a
+percentile existed then. See docs/BENCHMARK-PLAN.md's "Pre-campaign
+work item" section for the full story.
+
+What this adds, in playGame():
+
+- A bounded buffer (20000 doubles, ~22 minutes at 15fps) capturing the
+  real per-frame duration (the existing `frameTime` local) once per loop
+  iteration, before any pacing/sleep is applied that frame. Recording
+  stops rather than overflowing past the cap.
+
+- At the same clean-exit point the existing average-fps print already
+  uses, sort the captured buffer and take fps_p50 = 1/sorted[floor(0.50
+  * (n-1))], fps_p95 = 1/sorted[floor(0.95 * (n-1))]. Left at
+  runmanifest_init()'s -1.0 NA sentinel when the buffer is empty (n==0),
+  rather than dividing by zero; same NA fallback if the specific sample
+  at a percentile index happens to be exactly 0.0.
+
+  The inversion is deliberate, not a bug: p95 is taken over per-frame
+  TIME, so it names the slow tail (95% of frames were at least this
+  fast, 5% were slower), which inverts to the LOW end of the fps range,
+  below p50 -- not above it. Getting this backwards (e.g. by taking the
+  95th percentile of instantaneous-fps values directly) is exactly the
+  sign-of-the-metric bug this work item exists to avoid.
+
+- Emit a RUNMANIFEST block (schema v1) to RUNMANI.LOG via
+  runmanifest_emit(), alongside (not replacing) the existing printf --
+  other tooling may already grep the old prints. Fields filled from real
+  data: schema_version, environment (runmanifest_detect_environment(),
+  DJGPP-only), binary_sha12 (from the new PORT_BUILD_SHA12 macro, a
+  companion Makefile change -- inert here without a reader, and this
+  patch is inert without something to read; landed together as one
+  concern per the hub's patch-conventions.md), duration_s (the existing
+  netTime), exit_code (0, since this is the one clean-exit path this
+  hooks), fps_p50, fps_p95. started_utc is deliberately left at its
+  empty-string default: real DOS has no reliable UTC without a config
+  step this port doesn't have, and the schema treats "" as "field
+  present, empty" rather than a false claim. wave_tag/scene/
+  env_block_sha/audio_vital_status/regime and the banner/critical/warn
+  counters stay at runmanifest_init()'s NA/0/empty defaults for the same
+  reason -- dossage has no infra to populate those honestly yet.
+
+Scope: the sample buffer and its percentile computation are scoped
+identically to the existing frameCount/startTime/average-fps print they
+sit beside -- one playGame() call (one life), not the whole
+SDL_Init()..SDL_Quit() session. mainFunction()'s while(playGame()) loop
+can invoke playGame() many times per run, and the existing average print
+already re-fires on every one of those returns, so the new percentile
+block matches that existing scope rather than inventing a different one.
+
+Only the one clean-exit path is covered, matching the existing average
+print's own single call site -- catching every abnormal exit is out of
+scope for this patch.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01ULWUsqCW7jJL5TdiFQMJwf
+---
+ gameSource/game.cpp | 101 ++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 97 insertions(+), 4 deletions(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 7034511..dc9bead 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -52,6 +52,30 @@ int main( int inArgCount, char **inArgs ) {
+ #include "minorGems/util/stringUtils.h"
+ #include "minorGems/util/SettingsManager.h"
+ 
++#ifdef __DJGPP__
++// DOS-PORT: percentile fps telemetry (RUNMANIFEST fps_p50/fps_p95). See
++// playGame()'s frame-time sample buffer (where captured) and its exit
++// block (where summarized and emitted) for the rest of this feature.
++#include "runmanifest.h"
++
++// 20000 entries ~= 22 minutes at 15fps -- comfortably longer than any
++// planned benchmark run. Capture stops rather than overflowing if a run
++// somehow exceeds this.
++#define DOS_PORT_FRAME_TIME_SAMPLE_CAP 20000
++
++static int dosPortCompareFrameTimes( const void *inA, const void *inB ) {
++    double a = *(const double *)inA;
++    double b = *(const double *)inB;
++    if( a < b ) {
++        return -1;
++        }
++    if( a > b ) {
++        return 1;
++        }
++    return 0;
++    }
++#endif
++
+ 
+ 
+ // size of game image
+@@ -1082,7 +1106,22 @@ char playGame() {
+ 
+     int frameCount = 0;
+     unsigned long startTime = time( NULL );
+-    
++
++#ifdef __DJGPP__
++    // DOS-PORT: scoped identically to frameCount/startTime just above --
++    // mainFunction()'s while(playGame()) loop can call this function many
++    // times per session (one per life), same as the existing average-fps
++    // print in this function's exit block below.
++    //
++    // static (BSS), not on the stack: 20000 doubles is 160000 bytes.
++    // frameTimeSampleCount (an ordinary local, reset to 0 every call) is
++    // what actually bounds how much of the array is valid data for THIS
++    // life -- leftover content past that count, from a previous life, is
++    // never read.
++    static double frameTimeSamples[ DOS_PORT_FRAME_TIME_SAMPLE_CAP ];
++    int frameTimeSampleCount = 0;
++#endif
++
+     int titleFadeFrame = 0;
+     int numTitleFadeFrames = 200;
+ 
+@@ -1541,7 +1580,17 @@ char playGame() {
+         double newTimestamp = Time::getCurrentTime();
+         
+         double frameTime = newTimestamp - lastFrameTimeStamp;
+-        
++
++#ifdef __DJGPP__
++        // DOS-PORT: capture the real per-frame duration for the
++        // RUNMANIFEST percentile computation, before any pacing/sleep
++        // below adjusts anything -- see this function's exit block.
++        if( frameTimeSampleCount < DOS_PORT_FRAME_TIME_SAMPLE_CAP ) {
++            frameTimeSamples[ frameTimeSampleCount ] = frameTime;
++            frameTimeSampleCount ++;
++            }
++#endif
++
+         double extraTime = 1.0 / lockedFrameRate - frameTime;
+         
+         // DOS-PORT: SDL_Delay, not Thread::staticSleep -- on DOS,
+@@ -2122,8 +2171,52 @@ char playGame() {
+             (int)netTime / 60, (int)netTime % 60 );
+ 
+     fflush( stdout );
+-    
+-    
++
++#ifdef __DJGPP__
++    {
++        runmanifest_t manifest;
++        runmanifest_init( &manifest );
++
++        manifest.environment = runmanifest_detect_environment( NULL );
++
++#ifdef PORT_BUILD_SHA12
++        strncpy( manifest.binary_sha12, PORT_BUILD_SHA12,
++                 sizeof( manifest.binary_sha12 ) - 1 );
++        manifest.binary_sha12[ sizeof( manifest.binary_sha12 ) - 1 ] = '\0';
++#endif
++
++        manifest.duration_s = (int)netTime;
++        manifest.exit_code = 0;
++
++        if( frameTimeSampleCount > 0 ) {
++            qsort( frameTimeSamples, frameTimeSampleCount, sizeof( double ),
++                   dosPortCompareFrameTimes );
++
++            // p95 of frame TIME is the slow tail (95% of frames were at
++            // least this fast, 5% were slower) -- inverting it lands at
++            // the LOW end of the fps range, below p50, not above it. See
++            // this patch's own commit message for the motivating story.
++            int p50Index =
++                (int)( 0.50 * ( frameTimeSampleCount - 1 ) );
++            int p95Index =
++                (int)( 0.95 * ( frameTimeSampleCount - 1 ) );
++
++            if( frameTimeSamples[ p50Index ] > 0 ) {
++                manifest.fps_p50 = 1.0 / frameTimeSamples[ p50Index ];
++                }
++            if( frameTimeSamples[ p95Index ] > 0 ) {
++                manifest.fps_p95 = 1.0 / frameTimeSamples[ p95Index ];
++                }
++            }
++
++        FILE *runManifestLog = fopen( "RUNMANI.LOG", "a" );
++        if( runManifestLog != NULL ) {
++            runmanifest_emit( runManifestLog, &manifest );
++            fclose( runManifestLog );
++            }
++        }
++#endif
++
+     delete titleImage;
+ 
+     delete [] gameImage;
+-- 
+2.47.3
+
