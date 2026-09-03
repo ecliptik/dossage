@@ -22,7 +22,11 @@ gitignored — it holds planning inputs, not published documentation.
   Claude Code skill templates),
   `docs/` (architecture and process documentation), `templates/` (scaffolds
   for a new port repo), `gallery/` (screenshots/perf/features showcase per
-  port), `ports.yaml` (the candidate backlog + status tracker).
+  port), `ports.yaml` (the candidate backlog + status tracker),
+  `.claude-plugin/` + `skills/` (this repo doubling as a real Claude Code
+  plugin, name `sdldos`, for colon-namespaced `/sdldos:review` etc. --
+  `skills/` is symlinks back into `shared/skills/` and `.claude/skills/
+  port`, not a second copy; see `shared/skills/README.md`).
 - Not here: actual game source, vendored game engines, game assets, or a
   specific port's build output. Those belong in that port's own repo.
 

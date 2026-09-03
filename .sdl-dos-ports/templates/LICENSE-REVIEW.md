@@ -18,7 +18,7 @@ Notes:
 License: <!-- typically inherits the engine's license -->
 Notes:
 
-## SDL3 / SDL3_mixer / SDL3_image + `shared/patches/`
+## SDL3 / SDL3_mixer / SDL3_image + this port's own vendored `patches/SDL/`, `patches/SDL_mixer/`
 
 License: zlib (see sdl-dos-ports' THIRD-PARTY.md)
 Notes:

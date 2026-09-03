@@ -129,11 +129,14 @@ djgpp-check:
 #
 # Uses $(HUB_DIR)/shared/scripts/{fetch-sources.sh,apply-patches.sh,
 # verify-patches-applied.sh}, driven by this port's own vendor/sources.manifest
-# and patches/ directory. scripts/new-port.sh sets patches/SDL and
-# patches/SDL_mixer up as symlinks into $(HUB_DIR)/shared/patches/sdl3-dos/
-# and shared/patches/sdl3-mixer/, so apply-patches.sh (which only knows
-# about this port's own patches/<name>/) picks up the shared series with no
-# special-casing. patches/<engine>/ is a real directory this port owns.
+# and patches/ directory. scripts/new-port.sh seeds patches/SDL and
+# patches/SDL_mixer as this port's own real, vendored files (a one-time
+# copy from the hub's shared/patches/sdl3-dos/ and shared/patches/sdl3-mixer/
+# reference series at scaffold time, not a symlink into $(HUB_DIR)/ -- see
+# docs/patch-conventions.md's "Patches are vendored per-port, not shared").
+# apply-patches.sh only knows about this port's own patches/<name>/, so it
+# needs no special-casing either way. patches/<engine>/ is a real directory
+# this port owns, same as it always was.
 
 .PHONY: sources patches verify-patches-applied
 sources:
@@ -145,9 +148,18 @@ patches:
 verify-patches-applied:
 	@$(HUB_DIR)/shared/scripts/verify-patches-applied.sh
 
+# Rooted at this port's own vendored patches/ (real files since the
+# per-port-vendoring migration -- see the comment above), NOT
+# $(HUB_DIR)/shared/patches/. Getting this wrong is a silent-stale-build
+# hazard, not just a wrong path: make short-circuits a target once its
+# prerequisites are unchanged, so if these pointed at the hub's reference
+# copy, adding a patch to this port's own patches/SDL/ would change what
+# actually gets built (verify-patches-applied.sh and apply-patches.sh both
+# root at this port's own patches/<name>/) without changing what `make`
+# thinks the build depends on -- libSDL3.a's recipe would never re-run.
 MANIFEST_FILE      := $(VENDOR_DIR)/sources.manifest
-SDL3_PATCHES       := $(wildcard $(HUB_DIR)/shared/patches/sdl3-dos/*.patch)
-SDL3_MIXER_PATCHES := $(wildcard $(HUB_DIR)/shared/patches/sdl3-mixer/*.patch)
+SDL3_PATCHES       := $(wildcard $(REPO_ROOT)/patches/SDL/*.patch)
+SDL3_MIXER_PATCHES := $(wildcard $(REPO_ROOT)/patches/SDL_mixer/*.patch)
 SDL3_IMAGE_PATCHES :=
 
 # --- Stage 1: SDL3 ---------------------------------------------------------------

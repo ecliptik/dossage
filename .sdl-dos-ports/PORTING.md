@@ -92,6 +92,23 @@ if you haven't set up a remote for it yet), pre-populated from
 `git clone` of the new repo gets `.sdl-dos-ports/` immediately) so the new
 repo can immediately reference `.sdl-dos-ports/shared/...` from its build.
 
+`scripts/new-port.sh` also installs every current skill from this hub
+*and* from vcctrl into the new repo automatically (`npx skills add
+<repo> --full-depth --all -a claude-code`, no manual symlinking) — flat
+names (`/review`, `/benchmark`, vcctrl's own), scoped to that one repo.
+If you'd rather install once and get every skill under one
+colon-namespaced prefix everywhere instead of per-repo, this hub is also
+a real Claude Code plugin:
+
+```sh
+/plugin marketplace add https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git
+/plugin install sdldos@sdl-dos-ports
+# then: /sdldos:port, /sdldos:review, /sdldos:benchmark, /sdldos:dos-hardware-validation, ...
+```
+
+Both read the same `SKILL.md` files and don't conflict — see
+`shared/skills/README.md` for the full comparison.
+
 Update this repo's `ports.yaml`: set `dos_status: RESEARCH` and
 `port_repo_url` for the candidate you claimed.
 
@@ -117,7 +134,9 @@ across multiple subsystems before compiling.
 
 Reuse before rewriting:
 - SDL3-DOS platform behavior (VESA/Cirrus/S3, SB16/OPL2/OPL3/GUS/WaveBlaster
-  audio, gameport joystick, DPMI timing): `.sdl-dos-ports/shared/patches/sdl3-dos/`.
+  audio, gameport joystick, DPMI timing): your own `patches/SDL/`,
+  vendored once from `.sdl-dos-ports/shared/patches/sdl3-dos/` at scaffold
+  time (real files now, not a live link -- see `docs/patch-conventions.md`).
 - MIDI playback: `.sdl-dos-ports/shared/audio/midi_sched.{c,h}` plus the
   hardware backend of your choice.
 - Cross-build stages for SDL3/SDL3_mixer/SDL3_image:

@@ -122,20 +122,21 @@ stalls-vs-tightening finding for a real case.
 
 `templates/BENCHMARK.md` for a single result; `gallery/<name>/` once a
 port is showcase-ready. If a temporary diagnostic patch was landed in
-`shared/` to get here, land its removal too (see the `review` skill) —
-don't leave it as a silent tax on every port that pins past it. Same
-check for your own `patches/<vendor>-local/` overlay if you used one —
-it applies unconditionally, so a forgotten local diagnostic silently
-taxes every subsequent build of *your own port*, including whatever
-build this result gets cut from. Confirm it's empty or deliberately
-documented before treating the result as final.
+your own `patches/SDL/` (or any vendored series) to get here, land its
+removal too (see the `review` skill) before treating the result as
+final — a forgotten diagnostic silently taxes every subsequent build of
+*your own port*, including whatever build this result gets cut from.
 
-## Land a shared/ patch that came out of this?
+## Land a fix that came out of this in the hub's own reference series?
 
-Use the `review` skill before committing it. And commit your own
-working-tree vendor edits into a numbered patch at the end of each
-investigation slice, not at the end of the campaign — `apply-patches.sh`
-refuses to reset a dirty vendor tree by default, but that's a safety net,
-not a substitute for not letting hours of real work sit uncommitted
-where a routine tooling step (run for a completely unrelated reason) can
-destroy it.
+Use the `review` skill before committing it in the hub repo. Remember
+this only updates the hub's `shared/patches/` *reference copy* for the
+next new port — it doesn't retroactively reach your own already-
+vendored `patches/SDL/`, which needs the same patch copied in by hand if
+you want it there too (see `docs/patch-conventions.md`'s "Patches are
+vendored per-port" section). And commit your own working-tree vendor
+edits into a numbered patch at the end of each investigation slice, not
+at the end of the campaign — `apply-patches.sh` refuses to reset a dirty
+vendor tree by default, but that's a safety net, not a substitute for
+not letting hours of real work sit uncommitted where a routine tooling
+step (run for a completely unrelated reason) can destroy it.

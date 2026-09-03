@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# apply-patches.sh -- apply patches/<name>/*.patch (then patches/<name>-local/*.patch)
-# to vendor/<name>/.
+# apply-patches.sh -- apply patches/<name>/*.patch to vendor/<name>/.
 #
 # Patches are produced by `git format-patch` from a working branch in the
 # vendor tree and numbered lexically (0001-, 0002-, ...). Ordering matters;
@@ -11,26 +10,17 @@
 #      (not PIN_ME), `git reset --hard` the vendor tree to that SHA
 #      (discarding any prior patches, so this is idempotent).
 #   2. Apply every `patches/<name>/*.patch` in lexical order via `git am`.
-#   3. If `patches/<name>-local/` exists, apply its *.patch files next, in
-#      the same lexical order, on top of the series from step 2 -- see
-#      "Local overlay" below.
-#   4. If a patch fails to apply, abort the `git am` cleanly, print the
+#   3. If a patch fails to apply, abort the `git am` cleanly, print the
 #      failing path, and exit non-zero.
 #
-# Local overlay (patches/<name>-local/): for a temporary, single-
-# investigation diagnostic or workaround that only one port wants --
-# never a shared/-numbered slot for something that isn't a reusable
-# platform fix or reusable diagnostic tooling the NEXT investigation
-# would also want. This is not a new pattern: a port's own
-# patches/<engine>/ has always worked this way for engine-shaped
-# patches; patches/<name>-local/ is the same idea for a *shared* vendor
-# (SDL, SDL_mixer) a port doesn't own outright. Own independent NNNN
-# numbering, unrelated to the shared series' numbers. Never symlinked
-# from shared/ (unlike patches/<name>/ for a shared vendor) -- it's a
-# real, port-owned directory, tracked in the port's own repo, gitignored
-# nowhere. See docs/patch-conventions.md for the reusable-fix vs.
-# disposable-instrumentation criterion this exists to make structural
-# rather than a review-time judgment call.
+# patches/<name>/ is a real, port-owned directory for every vendor,
+# including a shared vendor like SDL or SDL_mixer -- scripts/new-port.sh
+# seeds it with a one-time copy of the hub's current patch series at
+# scaffold time (not a symlink into .sdl-dos-ports/), so a port builds
+# standalone from a plain `git clone`, no hub reach-back needed for
+# patches specifically. This script needs no special-casing either way;
+# it applies whatever real files are in patches/<name>/. See
+# docs/patch-conventions.md.
 #
 # SAFETY: step 1's `git reset --hard` is destructive to anything sitting
 # uncommitted in that vendor tree -- including hours of real investigation
@@ -55,10 +45,11 @@ set -euo pipefail
 
 # REPO_ROOT is the CALLER's repo root, not this script's own location --
 # see the matching comment in fetch-sources.sh. patches/<name>/ is expected
-# to exist under the caller's own repo; for a vendor whose patch series is
-# actually shared (e.g. SDL), the port repo carries patches/SDL as a
-# symlink into .sdl-dos-ports/shared/patches/sdl3-dos/ (scripts/new-port.sh
-# sets this up) so this script needs no special-casing.
+# to exist under the caller's own repo -- real, vendored files for every
+# vendor, including a vendor whose series originated in the hub (SDL,
+# SDL_mixer: scripts/new-port.sh seeds patches/SDL, patches/SDL_mixer with
+# a one-time copy at scaffold time) -- so this script needs no
+# special-casing.
 REPO_ROOT="${SDL_DOS_PORT_ROOT:-$PWD}"
 MANIFEST="$REPO_ROOT/vendor/sources.manifest"
 VENDOR_DIR="$REPO_ROOT/vendor"
@@ -103,9 +94,8 @@ fi
 
 # apply_patch_dir -- collect *.patch from $2 (LC_ALL=C lexical order) and
 # `git am` them against the vendor tree at $1. $3 is a human label for log
-# lines ("shared series" / "local overlay"). Returns 0 with nothing to do
-# if the directory doesn't exist or is empty -- that's the normal case for
-# patches/<name>-local/ on a port that has never needed one.
+# lines. Returns 0 with nothing to do if the directory doesn't exist or is
+# empty.
 apply_patch_dir() {
     local vendor_path="$1"
     local patches_path="$2"
@@ -156,7 +146,6 @@ apply_one() {
     local sha="$2"
     local vendor_path="$VENDOR_DIR/$name"
     local patches_path="$PATCHES_DIR/$name"
-    local local_patches_path="$PATCHES_DIR/${name}-local"
 
     if [[ ! -d "$vendor_path" ]]; then
         log "$name: vendor tree not present -- run scripts/fetch-sources.sh first"
@@ -187,16 +176,7 @@ apply_one() {
         (cd "$vendor_path" && git am --abort) 2>/dev/null || true
     fi
 
-    if ! apply_patch_dir "$vendor_path" "$patches_path" "shared series" "$name"; then
-        return 1
-    fi
-
-    # Local overlay, applied on top of the shared series against the SAME
-    # tree -- never resets between the two, so a local patch can assume
-    # the shared series' end state exactly like a shared patch assumes the
-    # slot before it. Absent entirely is the normal case; see the header
-    # comment above.
-    if ! apply_patch_dir "$vendor_path" "$local_patches_path" "local overlay" "$name"; then
+    if ! apply_patch_dir "$vendor_path" "$patches_path" "patch series" "$name"; then
         return 1
     fi
 }

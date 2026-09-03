@@ -80,11 +80,15 @@ scripts/new-port.sh <name> [target-dir]
 
 This creates the repo (or, if the operator already created one, see the
 adaptation note above -- run the equivalent steps by hand: subtree add,
-directory skeleton, `patches/SDL`+`patches/SDL_mixer` symlinks, skill
-install, and the template fills), all wired to this hub via
-`.sdl-dos-ports/` (a git subtree -- no `.gitmodules`, content merged
-directly into the port's own git history, reachable immediately after a
-plain `git clone`). This step already installs every skill from both this
+directory skeleton, vendoring `patches/SDL`+`patches/SDL_mixer` as real
+files copied from this hub's own `shared/patches/`, skill install, and
+the template fills), wired to this hub via `.sdl-dos-ports/` (a git
+subtree -- no `.gitmodules`, content merged directly into the port's own
+git history, reachable immediately after a plain `git clone`) for
+everything in `shared/` *except* patches, which the new repo now owns as
+its own standalone copy (see `docs/patch-conventions.md`'s "Patches are
+vendored per-port, not shared" -- no ongoing sync back to this hub's
+series once scaffolded). This step already installs every skill from both this
 hub and vcctrl into the new repo's `.claude/skills/` via
 `npx skills add <repo> --full-depth --all -a claude-code` (self-contained
 -- no subtree/submodule symlink needed for skills, only for the actual
@@ -110,8 +114,8 @@ the `.template` files yet -- see below) into the new repo's
 
 - `team-lead.md` -- the specialist roster (which of the charters below
   actually exist for this port) and doc paths.
-- `sdl-engine.md` -- reusable close to as-is; it owns the same
-  `patches/SDL` this port just symlinked in Step 2.
+- `sdl-engine.md` -- reusable close to as-is; it owns the port's own
+  vendored `patches/SDL` copy from Step 2.
 - `build-qa.md` -- this port's actual binary name and the banner/log
   lines a smoke check should expect (you won't know the real ones until
   compile succeeds; a reasonable placeholder now, refined once the

@@ -91,8 +91,8 @@ Read `.sdl-dos-ports/shared/tests/probes/README.md` before starting.
 
 ## What you do NOT do
 
-- Don't author patches against `shared/patches/` or this port's own engine
-  patches.
+- Don't author patches -- not this port's own vendored `patches/SDL/`,
+  not `patches/<engine>/`, not the hub's own `shared/patches/`.
 - Don't run real-hardware sessions yourself (realhw).
 - Don't do deep analysis of live-binary instrumentation (that's a separate
   hat, if this port has a dedicated perf-campaign specialist).

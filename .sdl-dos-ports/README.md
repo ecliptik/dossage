@@ -75,6 +75,23 @@ just to know vcctrl's own conventions. A port scaffolded before one was
 added won't have it yet — see `shared/skills/README.md` for the
 one-command fix.
 
+**Prefer namespaced invocation?** This repo is also a real Claude Code
+plugin (`.claude-plugin/plugin.json`, name `sdldos`) carrying every skill
+above under one colon-namespaced prefix, install once and use from
+anywhere instead of per-repo:
+
+```sh
+/plugin marketplace add https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git
+/plugin install sdldos@sdl-dos-ports
+# then: /sdldos:port, /sdldos:review, /sdldos:benchmark, /sdldos:dos-hardware-validation, ...
+```
+
+The two paths don't conflict — `npx skills` (flat names, installed into a
+specific port repo, works in Codex/Cursor too) and the plugin (colon
+namespace, installed once, available everywhere) read the same
+`SKILL.md` files under the hood. Pick whichever fits; a port repo can use
+both at once (Claude Code just shows two entries for the same skill).
+
 Deeper reference, only when a skill points you at it:
 [`PORTING.md`](PORTING.md) for the full slice-by-slice porting process.
 
