@@ -110,6 +110,58 @@ GAME_CXXFLAGS := \
     $(AUDIO_TIER_FLAGS) \
     $(NOSIMD_FLAGS)
 
+# --- Build fingerprint -----------------------------------------------------
+#
+# A content hash of everything that determines the binary, so a benchmark or
+# release result can name the build it came from and that name can be
+# RECOMPUTED later rather than merely trusted.
+#
+# This exists because the previous pin could not be. docs/BENCHMARK-PLAN.md
+# anchored a whole campaign to build_sha12 = 9cace45a, a value that appears
+# nowhere else, is not a git commit, is 8 hex where the convention is 12, and
+# has no recorded derivation -- so it could not be checked, only believed.
+# See that file's build-pin section.
+#
+# Hashes the INPUTS, never the output: a fingerprint of the binary that is
+# also embedded in the binary is circular and cannot be made to converge.
+#
+# Covered: the three vendor trees post-patch (which folds in each pin AND its
+# full applied patch series), the audio tier, the engine-stage compiler flags,
+# the hub build fragment that supplies the SDL stage's own flags, and the
+# compiler version.
+#
+# NOT covered: anything reached only at runtime -- game data under
+# gameSource/graphics|music|settings, CWSDPMI, or SDL hints set by the
+# launcher. Two builds with the same fingerprint can still behave differently
+# if the staged data differs, so hash-verify the staged tree separately (the
+# pre-flight in docs/BENCHMARK-PLAN.md already says to).
+#
+# Deliberately NOT passed as -DPORT_BUILD_SHA12 into the compile. The hub's
+# convention (shared/skills/dos-hardware-validation/references/runmanifest-log.md)
+# has the binary emit this field into its own run log, so a rig log proves
+# which binary produced it. dossage has no runmanifest emission at all --
+# nothing would print the macro -- so compiling it in today would buy nothing
+# and cost a stale-object hazard (the .o rule keys on sources, not on flags;
+# cf. AUDIO_TIER_STAMP above, which exists for exactly that reason). Recording
+# it beside the binary is honest and useful now; wiring it into the engine is
+# a separate patches/passage/ change that would alter the binary, and so must
+# not land between a baseline and the run it anchors.
+BUILD_SHA12 := $(shell { \
+    git -C $(VENDOR_DIR)/SDL        rev-parse HEAD^{tree}; \
+    git -C $(VENDOR_DIR)/passage    rev-parse HEAD^{tree}; \
+    git -C $(VENDOR_DIR)/minorgems  rev-parse HEAD^{tree}; \
+    echo "AUDIO_TIER=$(AUDIO_TIER)"; \
+    echo "GAME_CXXFLAGS=$(GAME_CXXFLAGS)"; \
+    sha256sum $(HUB_DIR)/shared/build/sdl3-dos.mk; \
+    $(CXX) -dumpversion; \
+  } 2>/dev/null | sha256sum | cut -c1-12)
+
+BUILD_SHA12_FILE := $(BUILD_DIR)/dossage.build-sha12
+
+.PHONY: build-sha12
+build-sha12:
+	@echo "$(BUILD_SHA12)"
+
 %.o: %.cpp
 	$(CXX) $(GAME_CXXFLAGS) -c $< -o $@
 
@@ -117,6 +169,9 @@ $(BUILD_DIR)/dossage.exe: $(SYSROOT)/lib/libSDL3.a $(GAME_OBJECTS)
 	mkdir -p $(BUILD_DIR)
 	$(CXX) $(GAME_CXXFLAGS) -o $@ $(GAME_OBJECTS) -L$(SYSROOT)/lib -lSDL3 -lm
 	$(STUBEDIT) $@ minstack=2048k
+	@printf '%s\n' "$(BUILD_SHA12)" > $(BUILD_SHA12_FILE)
+	@printf 'build_sha12=%s  sha256(exe)=%s\n' \
+	    "$(BUILD_SHA12)" "$$(sha256sum $@ | cut -c1-12)"
 
 .PHONY: game
 game: verify-patches-applied $(BUILD_DIR)/dossage.exe
@@ -150,6 +205,12 @@ stage: $(BUILD_DIR)/dossage.exe
 	install -m 0644 $(BUILD_DIR)/dossage.exe "$(STAGE_DIR)/DOSSAGE.EXE"
 	install -m 0644 $(CWSDPMI_EXE)           "$(STAGE_DIR)/CWSDPMI.EXE"
 	install -m 0644 $(CWSDPMI_DOC)           "$(STAGE_DIR)/CWSDPMI.DOC"
+	# The build fingerprint travels with the binary it identifies. The engine
+	# has no runmanifest emission, so nothing in a run log names the build --
+	# staging this makes the fingerprint readable ON the target instead, and
+	# means a staged tree that got mixed up with another build's is
+	# detectable rather than silent. 8.3 name: DOS reads this too.
+	install -m 0644 $(BUILD_SHA12_FILE)      "$(STAGE_DIR)/BUILDSHA.TXT"
 	rm -rf "$(STAGE_DIR)/graphics" "$(STAGE_DIR)/music" "$(STAGE_DIR)/settings"
 	cp -r $(PASSAGE_SRC)/graphics "$(STAGE_DIR)/graphics"
 	cp -r $(PASSAGE_SRC)/music    "$(STAGE_DIR)/music"

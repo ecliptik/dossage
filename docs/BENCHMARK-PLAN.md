@@ -64,7 +64,7 @@ KPI.
 
 ## The KPI, written down in advance
 
-Per card, on the 486DX2-66 + PicoGUS rig, build `9cace45a`:
+Per card, on the 486DX2-66 + PicoGUS rig, build `cf5f9a5a861e`:
 
 - **PASS:** sustained fps within **0.3 fps** of the card's established figure
   (Cirrus 14.94, ViRGE 14.16-14.5), audio present throughout, no visual
@@ -76,61 +76,72 @@ Per card, on the 486DX2-66 + PicoGUS rig, build `9cace45a`:
 - **Mach64 has no established figure** -- see its gate below. Its first run
   is exploratory and cannot pass or fail against a band that does not exist.
 
-Every result is attributed to `build_sha12 = 9cace45a`, the binary validated
-at 14.94 fps and reproducible byte-for-byte from a clean checkout.
+Every result is attributed to `build_sha12 = cf5f9a5a861e`
+(re-baselined 2026-09-02; see "The build pin" below).
 
-> **UNRESOLVED as of 2026-09-02 -- settle before the first cell runs.**
-> `9cace45a` cannot currently be reproduced or even recomputed.
->
-> What was verified:
-> - The build **is** deterministic. Two independent builds from a full
->   `make game-clean` produced byte-identical binaries, so
->   "reproducible byte-for-byte" is achievable in principle.
-> - The **source** tree reproduces exactly: `vendor/SDL` re-applies from the
->   pin plus the 125 vendored patches to tree
->   `b9660a14d0cacda1bd6124e498d8b159fee6cb73`, matching the baseline
->   recorded during the vendoring migration.
->
-> What did not:
-> - A clean build of the current tree yields
->   `sha256 750a5952777c3a3f06debaaaae4d4c3601df8d503257752244f9d9599aed9a74`
->   (`AUDIO_TIER=high`, the default). Its first 8 hex are `750a5952`, not
->   `9cace45a`; neither do sha1 or md5 of the binary produce `9cace45a`.
-> - `9cace45a` appears nowhere else in this repo or the hub, is not a git
->   commit in either, and is 8 hex characters where the hub's `build_sha12`
->   convention is 12. **No derivation for it is recorded anywhere**, so it
->   cannot be checked, only trusted.
-> - This port never wired `build_sha12` into its binary at all. The hub's
->   validation standard calls that field mandatory and leaves the wiring to
->   each port (`RUNMANIFEST_FLAGS` / `-DPORT_BUILD_SHA12=`); dossage's
->   `Makefile` has no such flag, so no run log this campaign produces can
->   carry a build fingerprint, and the KPI's "INVALID: hash mismatch on the
->   staged binary" gate has nothing to compare against.
->
-> **What this does and does not cast doubt on.** The 14.94 fps measurement
-> itself has substantial provenance and should not be discarded with the
-> hash. `.sdl-dos-ports/docs/optimization.md` records the campaign that
-> produced it in fine detail -- steady-state 14.9989 -> 15.089 fps under a
-> tightened pacer deadline, run average moving 14.936 -> 14.942, stall cost
-> 0.279 -> 0.654 ms/frame, the pacer landing within 0.03 ms of its deadline,
-> and a revert whose binary was byte-identical to the already-validated
-> build. Those are internally consistent numbers from a campaign with
-> falsified hypotheses, not a figure someone invented.
->
-> What has no provenance is narrowly the **build identifier**. `9cace45a`
-> entered the record on 2026-08-31 in `00a5f72`, a planning commit whose own
-> message says the campaign is "Not yet run" -- an identifier attached
-> retrospectively to an earlier validated binary, with no derivation
-> recorded. The defect is bookkeeping, not measurement.
->
-> Deliberately **not** resolved unilaterally, because the options change what
-> the campaign is anchored to: re-baseline onto a freshly built binary and
-> record the derivation command beside it, or first try to recover what
-> `9cace45a` referred to. Note that re-baselining costs the direct
-> comparability of new numbers against the 14.94 figure, since the binary
-> that produced it can no longer be identified with certainty. Wiring
-> `-DPORT_BUILD_SHA12=` would itself change the binary, so it must not be
-> done between baselining and the run.
+### The build pin
+
+**`build_sha12 = cf5f9a5a861e`**, re-baselined 2026-09-02. Recomputable at
+any time:
+
+    make build-sha12
+
+It is a content hash of the build's *inputs* -- the three vendor trees
+post-patch (folding in each pin and its full applied patch series), the
+audio tier, the engine-stage compiler flags, the hub build fragment that
+supplies the SDL stage's flags, and the compiler version. Inputs, never the
+output: a fingerprint of the binary that is also embedded in the binary
+cannot converge. `make game` writes it to `build/dossage.build-sha12` and
+`make stage` copies it to `BUILDSHA.TXT` beside `DOSSAGE.EXE`, so it is
+readable on the target too.
+
+The corresponding binary is
+`sha256 750a5952777c3a3f06debaaaae4d4c3601df8d503257752244f9d9599aed9a74`
+at `AUDIO_TIER=high` (the default). Verified deterministic: two independent
+builds from a full `make game-clean` produced byte-identical output.
+
+**Known gap -- nothing in a run log names the build.** The hub's validation
+standard has the binary emit `build_sha12` into its own runmanifest, so a
+rig log proves which binary produced it. dossage has no runmanifest emission
+at all, so there is nothing to print the field; passing
+`-DPORT_BUILD_SHA12=` today would compile a macro no code reads. Closing
+this properly needs an engine-side change under `patches/passage/`, which
+would itself alter the binary -- so it must land *before* a baseline, never
+between a baseline and the run it anchors. Until then `BUILDSHA.TXT` in the
+staged tree is the witness, and the pre-flight's staged-tree hash check is
+what actually guards against running the wrong build.
+
+#### Why this was re-baselined, and what it cost
+
+The previous pin, `build_sha12 = 9cace45a`, could not be reproduced or even
+recomputed. It appears nowhere else in this repo or the hub, is not a git
+commit in either, is 8 hex where the convention is 12, and **no derivation
+for it is recorded anywhere** -- so it could be trusted but never checked. A
+clean build of the current tree yields `750a5952...`; neither sha1 nor md5
+of the binary produces `9cace45a` either. It entered the record in `00a5f72`
+(2026-08-31), a planning commit whose own message says the campaign was "Not
+yet run" -- an identifier attached retrospectively to an earlier validated
+binary.
+
+**This does not impeach the 14.94 fps measurement.**
+`.sdl-dos-ports/docs/optimization.md` records the campaign that produced it
+in fine detail: steady-state 14.9989 -> 15.089 fps under a tightened pacer
+deadline, run average moving 14.936 -> 14.942, stall cost 0.279 -> 0.654
+ms/frame, the pacer landing within 0.03 ms of its deadline, and a revert
+whose binary was byte-identical to the already-validated build. That is an
+internally consistent narrative from a campaign that falsified hypotheses in
+turn and published a negative result. The defect was bookkeeping, not
+measurement.
+
+**The cost of re-baselining, stated plainly:** the binary that produced
+14.94 can no longer be identified, so the PASS bands below (Cirrus 14.94,
+ViRGE 14.16-14.5) are **prior-build figures, not same-build comparisons**. A
+new number landing outside a band is therefore ambiguous between "this card
+regressed" and "this is a different build than the one that set the band."
+Treat the first run on the Cirrus as re-establishing the reference under
+`cf5f9a5a861e`, not as a pass/fail against 14.94 -- and if it lands within
+0.3 fps of 14.94 anyway, that is evidence the two builds are equivalent, not
+merely a pass.
 
 ## The matrix
 
