@@ -79,6 +79,42 @@ Per card, on the 486DX2-66 + PicoGUS rig, build `9cace45a`:
 Every result is attributed to `build_sha12 = 9cace45a`, the binary validated
 at 14.94 fps and reproducible byte-for-byte from a clean checkout.
 
+> **UNRESOLVED as of 2026-09-02 -- settle before the first cell runs.**
+> `9cace45a` cannot currently be reproduced or even recomputed.
+>
+> What was verified:
+> - The build **is** deterministic. Two independent builds from a full
+>   `make game-clean` produced byte-identical binaries, so
+>   "reproducible byte-for-byte" is achievable in principle.
+> - The **source** tree reproduces exactly: `vendor/SDL` re-applies from the
+>   pin plus the 125 vendored patches to tree
+>   `b9660a14d0cacda1bd6124e498d8b159fee6cb73`, matching the baseline
+>   recorded during the vendoring migration.
+>
+> What did not:
+> - A clean build of the current tree yields
+>   `sha256 750a5952777c3a3f06debaaaae4d4c3601df8d503257752244f9d9599aed9a74`
+>   (`AUDIO_TIER=high`, the default). Its first 8 hex are `750a5952`, not
+>   `9cace45a`; neither do sha1 or md5 of the binary produce `9cace45a`.
+> - `9cace45a` appears nowhere else in this repo or the hub, is not a git
+>   commit in either, and is 8 hex characters where the hub's `build_sha12`
+>   convention is 12. **No derivation for it is recorded anywhere**, so it
+>   cannot be checked, only trusted.
+> - This port never wired `build_sha12` into its binary at all. The hub's
+>   validation standard calls that field mandatory and leaves the wiring to
+>   each port (`RUNMANIFEST_FLAGS` / `-DPORT_BUILD_SHA12=`); dossage's
+>   `Makefile` has no such flag, so no run log this campaign produces can
+>   carry a build fingerprint, and the KPI's "INVALID: hash mismatch on the
+>   staged binary" gate has nothing to compare against.
+>
+> Deliberately **not** resolved unilaterally, because both options change
+> what the campaign measures: re-baseline the pin onto a freshly built
+> binary (and record the derivation command beside it), or first recover
+> where `9cace45a` came from -- it may correspond to a source state that no
+> longer exists, in which case the 14.94 fps figure is not attributable to
+> anything reproducible. Wiring `-DPORT_BUILD_SHA12=` would also change the
+> binary, so it should not be done between baselining and the run.
+
 ## The matrix
 
 One CPU (486DX2-66), one sound card (PicoGUS, SB mode), three video cards.
@@ -127,11 +163,17 @@ round-trip costs a fixed tax regardless of scope.
    Never assume the rig is what it was last time.
 3. **Stage** the whole `build/stage/` tree to a fresh directory. Hash-verify
    before staging *and* after sending. Clear stale logs first -- they append.
-   Confirm `patches/*-local/` is empty before the build that gets staged --
-   an overlay applies unconditionally, and a forgotten diagnostic there
-   costs real fps with nothing in the run output to flag it. dossage's own
-   migration test used a 0.70ms/frame one; that alone would have moved
-   every number in this campaign.
+
+   Confirm `./scripts/verify-patches-applied.sh` exits 0 for the build that
+   gets staged. Since 2026-09-02 that gate checks series *content*, not just
+   patch counts, so it catches a patch file edited in place and never
+   re-applied -- which the count-only gate passed while `vendor/` still held
+   the old sources. (The older `patches/*-local/` overlay check this step
+   used to name is obsolete; the overlay mechanism was retired 2026-09-01
+   when patches became per-port vendored. The hazard it guarded against is
+   unchanged: a forgotten diagnostic costs real fps with nothing in the run
+   output to flag it -- dossage's own migration test used a 0.70ms/frame
+   one, which alone would have moved every number in this campaign.)
 4. **Run** >= 3 minutes of gameplay so startup amortizes (the first ~300
    frames are genuinely slower; a short run reports startup, not steady
    state). Fold `vcctrl_audio_verdict` into mid-run health checks, not just

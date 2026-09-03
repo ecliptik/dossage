@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# pre-commit -- refuse a commit that edits the .sdl-dos-ports/ subtree.
+#
+# WHY
+#
+# .sdl-dos-ports/ is a git SUBTREE, not a submodule. That means the hub's
+# files are ordinary tracked files in this repo, so editing one succeeds,
+# stages cleanly, produces a normal-looking commit, and never reaches the
+# hub. The next `git subtree pull` then silently reverts it. Git gives no
+# warning at any step -- there is no nested .git, no "modified content"
+# line, nothing that distinguishes it from editing this repo's own code.
+#
+# The 2026-09-01 per-port-vendoring migration closed this for patches/ (a
+# port's patch series is now its own real files, outside the subtree
+# prefix). Everything else under .sdl-dos-ports/ is still exposed:
+# shared/build/sdl3-dos.mk, shared/scripts/, docs/, agent charters. The
+# stale-build hazard fixed in hub db81f67 lived in exactly that space.
+#
+# The rule this enforces: land the change in the sdl-dos-ports repo, then
+# `git subtree pull` it back. See docs/hub-and-vendoring.md.
+#
+# INSTALL
+#
+#   git config core.hooksPath .githooks
+#
+# (core.hooksPath is local config, not carried by clone -- a fresh clone
+# has to run that line. `make hooks` does it for you.)
+#
+# ESCAPE HATCHES
+#
+#   - A merge commit is exempt: `git subtree pull` lands its result as a
+#     merge, and MERGE_HEAD exists while that commit is being written.
+#   - ALLOW_HUB_EDIT=1 git commit ...   for a deliberate local-only edit
+#     (debugging the fragment in place, say). Expect it to be reverted by
+#     the next subtree pull -- that is not a bug, it is the mechanism.
+
+set -euo pipefail
+
+# A subtree pull lands as a merge. Never block those.
+if [[ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]]; then
+    exit 0
+fi
+
+if [[ "${ALLOW_HUB_EDIT:-0}" == "1" ]]; then
+    exit 0
+fi
+
+staged=$(git diff --cached --name-only --diff-filter=ACMRD -- '.sdl-dos-ports/*' || true)
+
+if [[ -n "$staged" ]]; then
+    exec >&2
+    echo
+    echo "pre-commit: refusing -- this commit edits the .sdl-dos-ports/ subtree:"
+    echo
+    printf '    %s\n' $staged
+    echo
+    echo "  Those are hub-owned files. A commit here does NOT reach the hub,"
+    echo "  and the next 'git subtree pull' will silently revert it."
+    echo
+    echo "  Land the change in the sdl-dos-ports repo instead, then:"
+    echo
+    echo "    git subtree pull --prefix=.sdl-dos-ports \\"
+    echo "        ssh://git@forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git main --squash"
+    echo
+    echo "  A patch this port owns belongs in patches/SDL/ (or patches/passage/,"
+    echo "  patches/minorgems/) -- those are outside the subtree and yours to edit."
+    echo
+    echo "  Deliberate local-only edit? ALLOW_HUB_EDIT=1 git commit ..."
+    echo
+    exit 1
+fi
+
+exit 0

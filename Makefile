@@ -21,6 +21,16 @@ include $(REPO_ROOT)/tests/probes/probes.mk
 .PHONY: all
 all: sdl3 game
 
+# Install this repo's git hooks. core.hooksPath is local config and is not
+# carried by a clone, so a fresh checkout has to run this once. The hook
+# refuses commits that edit the .sdl-dos-ports/ subtree -- those never
+# reach the hub and the next `git subtree pull` silently reverts them.
+# See docs/hub-and-vendoring.md.
+.PHONY: hooks
+hooks:
+	@git config core.hooksPath .githooks
+	@echo "git hooks installed (core.hooksPath=.githooks)"
+
 # --- Game stage: Passage + the vendored minorGems subset -------------------
 
 PASSAGE_SRC  := $(VENDOR_DIR)/passage/gameSource
