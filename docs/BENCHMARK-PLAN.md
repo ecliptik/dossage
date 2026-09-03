@@ -63,29 +63,19 @@ granularity floor) out of the percentile buffer before computation, and
 counts rejects visibly (`Frame-time samples: N used, N rejected...`) rather
 than silently correcting them away.
 
-**Read this before trusting any dossage `fps_p50`/`fps_p95` figure,
-including from real hardware:** under DOSBox-X, the fix's own repeat smoke
-run technically passed (both fields present, `fps_p95 <= fps_p50`,
-plausible magnitudes) but rejected **60.4%** of samples in a 298s life, and
-the surviving ~40% clustered heavily on one or two discrete values (`16.67`
-recurring identically across three independent measurements) rather than
-spreading naturally. That is consistent with the fix correctly excluding
-impossible readings, but it is also consistent with the *surviving* samples
-still being coarser/less representative than a genuinely continuous
-per-frame signal -- a >60% discard rate is a lot of the distribution to be
-reconstructing a percentile from. Per this project's own rule (real
-hardware is authoritative, DOSBox-X is an automation gate -- see
-`CLAUDE.md`), this was judged not to block moving to real hardware, since
-the primary PASS/FAIL band below is average-based and the coarse average is
-unaffected by any of this -- but check the real-hardware run's own reject
-count and clustering before treating its `fps_p50`/`fps_p95` as more
-trustworthy than the average by default. A standalone `Time::getCurrentTime()`
-granularity/monotonicity probe (DOSBox-X vs. real hardware) is recommended,
-separately, to close this for good -- not done as part of this patch.
+**Historical note, superseded -- kept for the record, not current advice.**
+The paragraph that stood here through the first DOSBox-X smoke described a
+60.4%-rejected, clustering-on-16.67 result and recommended a standalone
+probe before trusting `fps_p50`/`fps_p95` at all. That was about patch
+`0034`'s *first* version, before its own reject-filter fix. The full,
+current story -- `0034`'s reject-filter fix, `0035`'s definitional fix, and
+the confirmed-real (not DOSBox-X-only) bimodal pacing finding that resulted
+-- is in the Known-open-items section below; read that instead of treating
+this paragraph as live guidance.
 
 ## The KPI, written down in advance
 
-Per card, on the 486DX2-66 + PicoGUS rig, build `9c90db0e7905`:
+Per card, on the 486DX2-66 + PicoGUS rig, build `f1f867ccadad`:
 
 - **PASS:** sustained fps within **0.3 fps** of the card's established figure
   (Cirrus 14.94, ViRGE 14.16-14.5), audio present throughout, no visual
@@ -97,14 +87,21 @@ Per card, on the 486DX2-66 + PicoGUS rig, build `9c90db0e7905`:
 - **Mach64 has no established figure** -- see its gate below. Its first run
   is exploratory and cannot pass or fail against a band that does not exist.
 
-Every result is attributed to `build_sha12 = 9c90db0e7905`
-(re-baselined 2026-09-02, second time same day; see "The build pin" below).
+Every result **from `f1f867ccadad` onward** is attributed to
+`build_sha12 = f1f867ccadad` (re-baselined 2026-09-02, third time same day
+-- see "The build pin" below). The two Cirrus runs recorded under
+`9c90db0e7905` (`docs/benchmarks/cirrus-cl-gd5434-2026-09-02.md`) predate
+this and are correctly attributed to that earlier pin in their own files --
+this section documents the *current* pin for new results, not a
+retroactive relabeling of old ones.
 
 ### The build pin
 
-**`build_sha12 = 9c90db0e7905`**, re-baselined 2026-09-02 (supersedes
-`cf5f9a5a861e` from earlier the same day, which was never used to record any
-result). Recomputable at any time:
+**`build_sha12 = f1f867ccadad`**, re-baselined 2026-09-02 (supersedes
+`9c90db0e7905`, which supersedes `cf5f9a5a861e` from earlier the same day
+-- both used to record real results, unlike the untraceable `9cace45a`
+before them; see "Why this was re-baselined" below). Recomputable at any
+time:
 
     make build-sha12
 
@@ -118,9 +115,13 @@ cannot converge. `make game` writes it to `build/dossage.build-sha12` and
 readable on the target too.
 
 The corresponding binary is
-`sha256 8480da383842a4b273dce263b144fcf0980d839ebcd36126c651126de1775afd`
-at `AUDIO_TIER=high` (the default). Independently reproduced by two separate
-sessions from a full `make game-clean`, byte-identical both times.
+`sha256 18ab16ff303ae076e6ac46e54ab117683eb56ce666ca825785b5545ddb3b3803`
+at `AUDIO_TIER=high` (the default). Independently reproduced (this repo's
+own build plus `build-qa-0034`'s separate rebuild), byte-identical both
+times. `9c90db0e7905`'s own binary
+(`sha256 8480da383842a4b273dce263b144fcf0980d839ebcd36126c651126de1775afd`)
+remains valid history, just not the current pin -- patch `0035` changed
+`game.cpp` again after it, which is why the hash moved.
 
 **Known gap CLOSED 2026-09-02.** `patches/passage/0034` wires
 `PORT_BUILD_SHA12` into the compile (`Makefile`, `BUILD_SHA12_STAMP` forces
@@ -180,8 +181,8 @@ One CPU (486DX2-66), one sound card (PicoGUS, SB mode), three video cards.
 | Card | State | What this run is for |
 |---|---|---|
 | Cirrus CL-GD5434 | **re-confirmed 2026-09-02, twice: 14.82 fps (`9c90db0e7905`), 14.77 fps (`f1f867ccadad`)** | Reference/repeatability. Runs banked -- SDL/0019 force-disables LFB for a genuine aperture defect. Two runs, two different builds, both in-band -- see `docs/benchmarks/cirrus-cl-gd5434-2026-09-02.md` and `...-f1f867ccadad.md`. |
-| S3 ViRGE 86C375 | validated, 14.16-14.5 fps | Confirm against the current build; earlier figures predate some pacer work. Uses LFB at 320x240x16. |
-| **ATI Mach64 215CT/-ET** | **UNVERIFIED** | **Gate first, then measure.** See below. |
+| S3 ViRGE 86C375 | **re-confirmed 2026-09-03, 14.82 fps** (build `f1f867ccadad`) | Reference/repeatability. Uses LFB at 320x240x16 -- see `docs/benchmarks/virge-86c375-2026-09-03.md`. |
+| ATI Mach64 215CT/-ET | **Gate passed, first datum 2026-09-03: 14.77 fps** (build `f1f867ccadad`) | Gated and measured -- see below and `docs/benchmarks/mach64-215ct-2026-09-03.md`. No established reference to compare against (only prior figure is a different CPU tier, pre-pacer-work). |
 
 ### Mach64 gate -- do this before treating any Mach64 number as a datum
 
@@ -203,6 +204,31 @@ precedent is why the diff comes first).
 
 If it lands somewhere unexpected, that is a finding worth reporting, not an
 obstacle to work around.
+
+**Ran 2026-09-03, and it landed somewhere unexpected: FAILED on the first
+attempt, then fixed.** The negotiated mode was **512x384 16bpp**, not
+640x480 -- a mode this specific rig's VGA capture stick cannot lock onto at
+all (operator decision, `docs/VIDEO-SWAP.md` in the `vcctrl` repo,
+2026-08-19: "stop running the mach64 in 512x384 ... it must be 640x480").
+Root cause: core SDL3's `SDL_GetClosestFullscreenDisplayMode()` (vendored,
+not a DOS-layer or dossage patch) ties on aspect ratio -- 320x240, 512x384,
+and 640x480 are all exactly 4:3 -- and always keeps the smallest qualifying
+candidate on a tie. Not caused by `PIN_WINDOW_TO_NATIVE_MODE` (that hint
+cannot fire on the very first mode-set). This exact case is the documented
+motivating example for the shared layer's `SDL_HINT_DOS_FORCE_MODE_ID`
+hint, and doskutsu hit the identical bug on the identical
+Mach64/UniVBE-6.70 combination (their own `docs/internal/BOOT.md`,
+2026-08-19 -- the same investigation this rig's operator note traces to).
+
+**Fix, and it needs to travel with every future Mach64 launch on this
+rig**: `SET SDL_HINT_DOS_FORCE_MODE_ID=0x0111` before running
+`DOSSAGE.EXE`. Confirmed working (`DOSVESA-MODESET: id=0x0111 640x480
+16bpp`, capture stick went `frozen` -> `locked`, visual diff clean). This
+is a launch-environment requirement, not a one-time workaround -- dossage
+has no boot-menu/launcher infra yet to bake it in (see
+`profiles/dossage.yaml`'s TBD notes), so it must be set by hand or scripted
+every time until that exists. Full story:
+`docs/benchmarks/mach64-215ct-2026-09-03.md`.
 
 ## Per-card procedure
 
@@ -338,10 +364,24 @@ the root cause, and it sat unrecognised in a log for hours.
   capture is accurate on both environments) but the *interpretation*
   needs care: this is a genuine bimodal-distribution finding, not the
   single-tail-stall shape the KPI was originally written to expose --
-  don't compare it across cards as a simple number yet. **Queued as a
-  standalone `Time::getCurrentTime()`/pacer-timing probe** (isolated
-  from the full game) to identify the 60ms cluster's source -- two
-  independent sessions (build-qa, vcctrl-c3) both converged on
-  recommending this rather than guessing further from full-game data.
+  don't compare it across cards as a simple number yet.
+  **Cross-card confirmation, 2026-09-03: three cards, three chip
+  families, one identical result -- the video card is ruled out as the
+  cause entirely.** `fps_p50=16.67`/`fps_p95=9.09`, near-zero reject
+  rate (0.22-0.27% across all three), now hold identically on Cirrus
+  (banked), S3 ViRGE (LFB), and ATI Mach64 (LFB, forced 640x480 via
+  `SDL_HINT_DOS_FORCE_MODE_ID` -- see the Mach64 gate section above).
+  Same two clusters regardless of banked vs. LFB rules out the
+  framebuffer-write path; same two clusters across three unrelated chip
+  vendors rules out anything card-specific at all. What's left constant
+  across all three runs is the CPU (486DX2-66) and the build -- pointing
+  squarely at a CPU/system-timer-level mechanism. Still doesn't pin down
+  either cluster's exact source (110ms plausibly 2x the PC BIOS/PIT
+  tick, ~54.925ms; 60ms unidentified). **Queued as a standalone
+  `Time::getCurrentTime()`/pacer-timing probe** (isolated from the full
+  game) -- two independent sessions (build-qa, vcctrl-c3) both converged
+  on recommending this rather than guessing further from full-game data.
   Not performed as part of this campaign. Full data:
-  `docs/benchmarks/cirrus-cl-gd5434-2026-09-02-f1f867ccadad.md`.
+  `docs/benchmarks/cirrus-cl-gd5434-2026-09-02-f1f867ccadad.md`,
+  `docs/benchmarks/virge-86c375-2026-09-03.md`,
+  `docs/benchmarks/mach64-215ct-2026-09-03.md`.

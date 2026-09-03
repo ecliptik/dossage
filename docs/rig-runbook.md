@@ -95,16 +95,49 @@ The short version, because the failure modes are non-obvious:
    anything else. A new video BIOS is the most likely thing to break the
    capture path.
 3. `bin/vcctrl-cardid` against a sweep log to identify the card from
-   behaviour, not from UniVBE.
-4. `bin/vcctrl-uvconfig` — runs UniVBE's `uvconfig`, then **looks** rather
-   than sending a fixed key sequence. On every card tested so far (ViRGE
-   baseline, ViRGE->Mach64, ViRGE->Cirrus GD-5434) it has run fully
-   non-interactively and returned straight to a prompt in ~2 seconds. If a
-   screen appears instead, that is the swap path working as intended, not a
-   failure — capture between every keystroke by hand from there, never send
-   a guessed pair. See `vcctrl-uvconfig`'s own docstring for why: the
-   remembered "press space, press space" workflow has been tested against
-   three separate swaps and never reproduced.
+   behaviour, not from UniVBE. **Don't trust this run alone if UVCONFIG
+   hasn't been re-run yet for the new card** — confirmed 2026-09-03 on a
+   Cirrus→ViRGE swap: cardid came back LOW CONFIDENCE with a stale driver
+   still in place, top match "Cirrus (onboard)" (4/5=80%) narrowly beating
+   ViRGE (6/8=75%), both `s3_probe` and `cirrus_bug` signals firing at
+   once, and `total_vram` reading 1024 KB — matching the *previous* card,
+   not the one physically installed. Fresh `dinspect` agreed with the
+   physical swap (`S3 ViRGE/DX or /GX`) even at this stage, so the two
+   witnesses can genuinely disagree here; re-run cardid after step 4/6
+   below rather than trusting a pre-UVCONFIG read of either one alone.
+   Also watch for a physical "OUT OF RANGE" on the monitor itself (not
+   just a capture-stick freeze) during a cell's gameplay mode-set with a
+   stale driver in place — same root cause, worse symptom, resolved the
+   same way (reboot picks a safe mode again; it's the driver that's stale,
+   not the hardware).
+4. `bin/vcctrl-uvconfig` — **as of 2026-09-03 this tool REFUSES to run
+   UVCONFIG at all**, and that refusal is correct, not a bug to route
+   around. UVCONFIG.EXE only renders in text mode (`MODE03`), but this
+   rig's VGA capture stick only locks onto mode 12h — so the instant the
+   machine switches to text mode for UVCONFIG, the harness (and this
+   session, capture-only) goes completely blind to the screen for the
+   entire interactive portion. The tool won't start something it cannot
+   see through to a safe finish; its own refusal message cites the
+   six-hour incident this exact blind-interactive shape caused before.
+   **This step now requires a human physically at the machine**:
+   ```
+   C:\VGACAP\MODE03          (text mode -- capture goes blind, expected)
+   C:\UNIVBE\UVCONFIG.EXE    (read what it prints: chip detected, any
+                               withheld modes -- the Mach64-CT case that
+                               started this whole procedure)
+   C:\VGACAP\MODE12          (restores capture)
+   Ctrl-Alt-Delete            (harness can do this part — AUTOEXEC loads
+                               the new config on boot)
+   ```
+   After the reboot, `vcctrl-uvconfig --verify` doesn't check anything
+   itself — it prints `FIND`-based instructions for grepping a fresh
+   cell's SDL log for `oem_string`, the expected mode ID, `LFB-decision`,
+   and `total_vram` (which identifies the card through the shim: 2048 KB
+   Mach64, 4096 KB ViRGE — a very different number from cardid's *direct*
+   `vram=` reading in the same log, and both are worth checking). Earlier
+   text in this repo's history described this tool as running UVCONFIG
+   non-interactively and closed-loop — that was true for an older version;
+   it no longer runs UVCONFIG under any circumstance as of this date.
 5. **If the VGA capture stick loses lock (`state: "frozen"`) mid-run, that
    is not the same as a stuck interactive menu.** Pull a frame from the
    hardware camera (`vcctrl_camera_shot`, `vcctrl-camera` skill) before
@@ -114,11 +147,35 @@ The short version, because the failure modes are non-obvious:
 6. Reboot (uvconfig generates a driver file; the TSR that reads it only
    does so at load time, so a stale one stays resident until reboot),
    confirm the prompt via RDYPULSE.
-7. Run the anchor sweep (RB, `--collect`) — not expecting it to match the
-   old card's numbers, but because it has the most banked history and is
-   the most interpretable shape.
+7. ~~Run the anchor sweep (RB, `--collect`).~~ **NOT a default step —
+   operator correction, 2026-09-03**: *"Card swaps should be relatively
+   lightweight, not full regression tests every time."* Fresh identity
+   witnesses (dinspect + cardid, both re-run after step 4/6 above, not
+   before — see step 3's note) are the swap validation. A full sweep is
+   something a *benchmark* run decides to do, not something every swap
+   owes by default — running one to "validate" a swap that dinspect+cardid
+   had already confirmed was the over-testing this correction is about.
 8. **A swap starts a new results column.** Say so explicitly when handing
    numbers to an analysis session, or the comparison happens by default.
+
+## 2a. Structuring a multi-CPU × multi-card campaign
+
+**The card is the expensive, outer loop; the CPU is the cheap, inner
+loop — swap the campaign around that asymmetry, not around convenience.**
+A card swap costs a physical operator (the UVCONFIG step above) plus a
+full identity re-confirmation; a CPU swap is a plain hardware swap with no
+driver state to regenerate downstream. Running UVCONFIG once per card and
+sweeping every CPU against it, versus once per card/CPU pair, is the same
+coverage for a fraction of the physically-present-operator time:
+
+    for each card (ViRGE, Mach64, Cirrus):
+        swap the card, run UVCONFIG once (section 2, steps 1-6)
+        confirm identity once (fresh dinspect + cardid)
+        for each CPU (POD-83, Am5x86-133, DX2-66, DX2-50):
+            swap the CPU (cheap, no UVCONFIG)
+            run that CPU's benchmark cell/sweep
+
+Three UVCONFIG runs total instead of twelve, for a 3-card × 4-CPU matrix.
 
 ## 3. PicoGUS mode
 
