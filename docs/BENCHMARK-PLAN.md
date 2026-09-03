@@ -107,13 +107,30 @@ at 14.94 fps and reproducible byte-for-byte from a clean checkout.
 >   carry a build fingerprint, and the KPI's "INVALID: hash mismatch on the
 >   staged binary" gate has nothing to compare against.
 >
-> Deliberately **not** resolved unilaterally, because both options change
-> what the campaign measures: re-baseline the pin onto a freshly built
-> binary (and record the derivation command beside it), or first recover
-> where `9cace45a` came from -- it may correspond to a source state that no
-> longer exists, in which case the 14.94 fps figure is not attributable to
-> anything reproducible. Wiring `-DPORT_BUILD_SHA12=` would also change the
-> binary, so it should not be done between baselining and the run.
+> **What this does and does not cast doubt on.** The 14.94 fps measurement
+> itself has substantial provenance and should not be discarded with the
+> hash. `.sdl-dos-ports/docs/optimization.md` records the campaign that
+> produced it in fine detail -- steady-state 14.9989 -> 15.089 fps under a
+> tightened pacer deadline, run average moving 14.936 -> 14.942, stall cost
+> 0.279 -> 0.654 ms/frame, the pacer landing within 0.03 ms of its deadline,
+> and a revert whose binary was byte-identical to the already-validated
+> build. Those are internally consistent numbers from a campaign with
+> falsified hypotheses, not a figure someone invented.
+>
+> What has no provenance is narrowly the **build identifier**. `9cace45a`
+> entered the record on 2026-08-31 in `00a5f72`, a planning commit whose own
+> message says the campaign is "Not yet run" -- an identifier attached
+> retrospectively to an earlier validated binary, with no derivation
+> recorded. The defect is bookkeeping, not measurement.
+>
+> Deliberately **not** resolved unilaterally, because the options change what
+> the campaign is anchored to: re-baseline onto a freshly built binary and
+> record the derivation command beside it, or first try to recover what
+> `9cace45a` referred to. Note that re-baselining costs the direct
+> comparability of new numbers against the 14.94 figure, since the binary
+> that produced it can no longer be identified with certainty. Wiring
+> `-DPORT_BUILD_SHA12=` would itself change the binary, so it must not be
+> done between baselining and the run.
 
 ## The matrix
 
