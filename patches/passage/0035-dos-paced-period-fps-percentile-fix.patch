@@ -1,0 +1,162 @@
+From cdacf0e8a1a4a45e4de76d043164bb1546b85288 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Wed, 2 Sep 2026 22:26:50 -0700
+Subject: [PATCH] dos: measure full paced period for RUNMANIFEST percentiles,
+ not work time
+
+Patch 0034's percentile capture read `frameTime` -- the pacer's own
+per-frame WORK-time measurement, deliberately excluding that frame's own
+sleep so the extraTime math a few lines below stays correct. Feeding the
+same quantity into the RUNMANIFEST fps_p50/fps_p95 buffer was wrong: work
+time is structurally >= lockedFrameRate whenever the pacer has slack to
+spend (this rig always does in steady state, ~24ms/frame per
+docs/BENCHMARK-PLAN.md), so 1/work-time cannot fall below 15fps no matter
+how the frame actually paced out. The first real-hardware run against
+0034 confirmed this on the nose: fps_p50=fps_p95=16.67 (60ms of work,
+well inside the documented 42-58ms range), not a stall, not clock noise
+-- just the wrong quantity for a percentile meant to catch pacer stalls.
+
+Fix: capture the full paced period instead -- the delta between
+consecutive `lastFrameTimeStamp` values, both taken AFTER that frame's
+own sleep (i.e. between two "start timing next frame" timestamps). In
+steady state this sits at ~1/lockedFrameRate (~66.67ms), because the
+pacer pads work time up to that budget every frame, and only grows past
+it on a genuine stall -- the actual "5% of frames were slower" shape a
+stall-catching p95 needs.
+
+Mechanically: the old capture site (reading `frameTime`, right after it
+is computed) is removed outright; `frameTime` itself and the extraTime
+math that consumes it are untouched -- this patch does not touch the
+pacer. The capture moves to the "start timing next frame" reassignment
+at the bottom of the loop: take one fresh timestamp, use it both to
+compute this frame's paced period (against the OLD lastFrameTimeStamp)
+and, after that, as the new lastFrameTimeStamp -- same single clock read
+the original code always made at that point, so this adds no extra
+Time::getCurrentTime() call. The existing reject-filter
+(non-positive / below DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S) is reused
+verbatim against the new quantity; a real paced period should never come
+close to that 1ms floor, but it stays as a defensive sanity check.
+
+Names (frameTimeSamples/frameTimeSampleCount/frameTimeRejected*/
+DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S/dosPortCompareFrameTimes) are kept
+as-is -- renaming every call site for a quantity that is still, in a
+real sense, "the frame time RUNMANIFEST cares about" bought less clarity
+than it cost in diff noise. Comments at both the removed and new capture
+sites, and the DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S definition, are
+rewritten so none of them still describe the old (work-time) semantics.
+
+The percentile computation itself (sort, p50Index/p95Index, the
+1.0/sorted[...] inversion, binary_sha12 embedding, RUNMANIFEST emit) is
+unchanged -- only the input reaching that buffer changes.
+
+Kept as a separate patch rather than amended into 0034: a real-hardware
+PASS result (docs/benchmarks/cirrus-cl-gd5434-2026-09-02.md,
+build_sha12=9c90db0e7905) already cites 0034's own diff, so that file
+stays frozen.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TYcLv9sr97HFUcYBXKMgTu
+---
+ gameSource/game.cpp | 70 ++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 50 insertions(+), 20 deletions(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 270d5cd..0f7dcd9 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -63,8 +63,12 @@ int main( int inArgCount, char **inArgs ) {
+ // somehow exceeds this.
+ #define DOS_PORT_FRAME_TIME_SAMPLE_CAP 20000
+ 
+-// DOS-PORT: floor below which a captured frameTime cannot be a real
+-// measurement, derived from the clock's own documented granularity
++// DOS-PORT: floor below which a captured sample -- the full paced period
++// between successive frames (see playGame()'s exit-block capture site;
++// this used to be the per-frame work time `frameTime`, before patch 0035
++// moved the capture site to also include each frame's own pacer sleep) --
++// cannot be a real measurement, derived from the clock's own documented
++// granularity
+ // (Time::getCurrentTime() truncates to whole milliseconds -- TimeDOS.cpp's
+ // tv_usec/1000, see the pacer's own comment on this above), not from any
+ // assumption about how fast this game's per-frame work can get. A real
+@@ -1613,24 +1617,16 @@ char playGame() {
+         
+         double frameTime = newTimestamp - lastFrameTimeStamp;
+ 
+-#ifdef __DJGPP__
+-        // DOS-PORT: capture the real per-frame duration for the
+-        // RUNMANIFEST percentile computation, before any pacing/sleep
+-        // below adjusts anything -- see this function's exit block.
+-        // Reject implausible readings rather than trusting the clock
+-        // blindly -- see DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S's own comment.
+-        if( frameTime <= 0.0 ) {
+-            frameTimeRejectedNonPositive ++;
+-            }
+-        else if( frameTime < DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S ) {
+-            frameTimeRejectedTooSmall ++;
+-            }
+-        else if( frameTimeSampleCount < DOS_PORT_FRAME_TIME_SAMPLE_CAP ) {
+-            frameTimeSamples[ frameTimeSampleCount ] = frameTime;
+-            frameTimeSampleCount ++;
+-            }
+-#endif
+-
++        // DOS-PORT: `frameTime` is pure work time (render + game logic +
++        // audio pump), deliberately excluding this frame's own pacer
++        // sleep below -- that is what the extraTime math immediately
++        // below needs. It is NOT captured into the RUNMANIFEST percentile
++        // buffer here any more (patch 0034 did; patch 0035 moved it) --
++        // work time is structurally >= lockedFrameRate whenever the pacer
++        // has slack to spend, which is every steady-state frame on this
++        // rig, so it cannot show a pacer stall. See the capture site at
++        // this function's "start timing next frame" reassignment below,
++        // which measures the full paced period instead.
+         double extraTime = 1.0 / lockedFrameRate - frameTime;
+         
+         // DOS-PORT: SDL_Delay, not Thread::staticSleep -- on DOS,
+@@ -1858,8 +1854,42 @@ char playGame() {
+             }
+ #endif
+ 
++#ifdef __DJGPP__
++        // DOS-PORT: capture the full paced period -- the delta between
++        // this and the PREVIOUS "start timing next frame" timestamp, both
++        // taken AFTER their own pacer sleep -- for the RUNMANIFEST
++        // percentile buffer. Patch 0034 captured `frameTime` (pure work
++        // time, above) here instead; that quantity excludes every frame's
++        // own sleep by construction, so it is structurally >= 15fps
++        // whenever the pacer has any slack to spend (this rig always
++        // does in steady state) and cannot expose a pacer stall, which is
++        // the whole point of a stall-catching p95. The paced period sits
++        // at ~1/lockedFrameRate (~66.67ms) in steady state -- the pacer
++        // pads work time up to that budget every frame -- and only grows
++        // past it on a genuine stall, which is the actual "5% of frames
++        // were slower" shape p95 needs. Same reject-filter as before,
++        // applied to this quantity now instead of `frameTime` -- see
++        // DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S's own comment.
++        double pacedPeriodTimestamp = Time::getCurrentTime();
++        double pacedPeriod = pacedPeriodTimestamp - lastFrameTimeStamp;
++
++        if( pacedPeriod <= 0.0 ) {
++            frameTimeRejectedNonPositive ++;
++            }
++        else if( pacedPeriod < DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S ) {
++            frameTimeRejectedTooSmall ++;
++            }
++        else if( frameTimeSampleCount < DOS_PORT_FRAME_TIME_SAMPLE_CAP ) {
++            frameTimeSamples[ frameTimeSampleCount ] = pacedPeriod;
++            frameTimeSampleCount ++;
++            }
++
++        // start timing next frame
++        lastFrameTimeStamp = pacedPeriodTimestamp;
++#else
+         // start timing next frame
+         lastFrameTimeStamp = Time::getCurrentTime();
++#endif
+ 
+ 
+         // DOS-PORT: rest-of-loop-cost timing (was here through patch
+-- 
+2.47.3
+
