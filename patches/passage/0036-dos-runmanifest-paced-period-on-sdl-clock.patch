@@ -1,0 +1,252 @@
+From 2d7148d42b39f5aa0f35d0d0fb5cb52919c0006e Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 3 Sep 2026 12:30:16 -0700
+Subject: [PATCH] dos: measure the RUNMANIFEST paced period on SDL's clock, not
+ gettimeofday()
+
+Patch 0035's fps_p50/fps_p95 capture read Time::getCurrentTime() --
+minorGems' gettimeofday() wrapper -- to time the paced period between
+consecutive frames. Every real-hardware run since then reported the
+same two values, bit for bit: fps_p50=16.67 (60ms) and fps_p95=9.09
+(110ms), on Cirrus, ViRGE and Mach64, on a 486DX2-66, a 486DX2-50 and
+an Am5x86-133, while the time(NULL) average moved from 13.69 to 15.02fps
+across those same runs (docs/PACER-TIMING-INVESTIGATION.md).
+
+The clock is the cause, not the game. The DJGPP libc reference for
+gettimeofday() says: "Although this function returns microseconds for
+compatibility reasons, the values are precise to less than 1/20 of a
+second only. The underlying DOS function has 1/20 second granularity,
+as it is calculated from the 55 ms timer tick count." DOS reports that
+tick count in hundredths of a second, and one 54.925ms tick is 5.49
+hundredths, so consecutive readings step by 5 or 6. A true ~66.67ms
+frame always spans one or two ticks, so its measured period can only
+read 50/60ms or 100/110ms. Sort a few thousand of those and the median
+is 60ms and the 95th percentile is 110ms on every machine, because
+they are properties of the ruler. tests/probes/pacesim.c reproduced
+the identical pair in isolation on real hardware (Am5x86-133, 2992
+samples, no SDL, rendering or audio: median 60.0000ms, p95 110.0001ms,
+max 330.0001ms, i.e. six ticks reported as 33 hundredths). The
+near-zero samples patch 0034's reject filter was written against were
+the same clock returning the same tick twice.
+
+Fix: read the paced period from SDL_GetTicksNS() -- DJGPP uclock(),
+~0.84us resolution, and the clock the absolute-deadline pacer (patch
+0030) already converges against, so pacing and measurement now share
+one clock family (docs/timing.md's doskutsu precedent). The delta is
+signed and bounded on both sides: uclock() is not monotonic on real DOS
+hardware (~1 corrupt sample per 1800 frames, SDL/0136's YIELDDBG data),
+and a backwards step would otherwise enter the buffer as a 2^64-scale
+"period". The existing 1ms lower bound stays; a 5s upper bound is
+added; both reject buckets are counted and reported at exit, never
+silently dropped. The first loop iteration captures nothing (no
+previous post-pacer reading exists yet).
+
+Unchanged: the pacer itself, its frameTime/extraTime arithmetic (which
+keeps its own Time::getCurrentTime() read, as before 0035 shared that
+read with the capture), the percentile computation and RUNMANIFEST
+emission, and the time(NULL) average -- which stays as the independent
+witness a self-reported metric needs (docs/timing.md).
+
+Why this matters beyond bookkeeping: docs/BENCHMARK-PLAN.md's KPI is
+percentile-based, and the 486DX2-50 campaign it is about to judge
+(13.69fps, first datum) cannot be judged on percentiles that cannot
+move. This patch is that campaign's Phase 0.
+
+Verified (DOSBox-X, correctness only -- never a performance number): one
+full natural life each on three builds of this series. Percentiles now
+move with the run instead of reading the ruler: fps_p50=15.00 /
+fps_p95=14.83 (high tier), 15.00 / 14.77 (low tier), 15.00 / 14.81
+(high tier plus the 0037 diagnostic), against 16.67 / 9.09 on every run
+before this patch. 4474 samples captured per 4475-frame life (the first
+iteration captures nothing by design), zero rejects in all three
+buckets, time(NULL) average 14.97-15.02fps, game time 4:58-4:59.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017TKEXpxndNddTzMQkSdtBX
+---
+ gameSource/game.cpp | 143 ++++++++++++++++++++++++++------------------
+ 1 file changed, 86 insertions(+), 57 deletions(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 0f7dcd9..ed59d03 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -63,34 +63,40 @@ int main( int inArgCount, char **inArgs ) {
+ // somehow exceeds this.
+ #define DOS_PORT_FRAME_TIME_SAMPLE_CAP 20000
+ 
+-// DOS-PORT: floor below which a captured sample -- the full paced period
+-// between successive frames (see playGame()'s exit-block capture site;
+-// this used to be the per-frame work time `frameTime`, before patch 0035
+-// moved the capture site to also include each frame's own pacer sleep) --
+-// cannot be a real measurement, derived from the clock's own documented
+-// granularity
+-// (Time::getCurrentTime() truncates to whole milliseconds -- TimeDOS.cpp's
+-// tv_usec/1000, see the pacer's own comment on this above), not from any
+-// assumption about how fast this game's per-frame work can get. A real
+-// build-qa DOSBox-X run found roughly half of all captured samples in a
+-// long life reading as low as ~7.6e-8s (a nonsensical ~13 million fps) --
+-// confirmed by direct calculation that pure floating-point rounding of
+-// two millisecond-quantized instants cannot produce a nonzero result
+-// smaller than a genuine millisecond-scale difference on its own, so a
+-// value this far below one clock tick means the underlying clock read
+-// something non-monotonic or stale, not that a frame actually ran in
+-// under a microsecond. Leading hypothesis (not yet confirmed by a
+-// dedicated probe): DJGPP's gettimeofday() derives from the same
+-// periodically-serviced BIOS tick counter this file's own pacer history
+-// already documents as capable of stalling under insufficient yielding
+-// (see the reverted busy-wait experiment's comment above, which measured
+-// time(NULL) itself losing 54% of ticks on real hardware) -- a stalled
+-// tick would read back near-identical to the previous call, then "catch
+-// up" on the next real tick, which would produce exactly this near-zero/
+-// compensating-large alternation. Filtering rather than trusting these
+-// blindly. 0.001s (1ms) matches that floor without needing to assume
+-// anything about this game's own performance profile.
++// DOS-PORT: bounds outside which a captured sample -- the full paced
++// period between successive frames, measured on SDL's own timebase
++// (SDL_GetTicksNS(), i.e. DJGPP uclock(), ~0.84us resolution; see the
++// capture site at the bottom of playGame()'s loop) -- cannot be a real
++// measurement.
++//
++// Patches 0034/0035 measured this quantity with Time::getCurrentTime()
++// (minorGems -> DJGPP gettimeofday()). That clock is unfit for the
++// purpose. The DJGPP libc reference for gettimeofday() says: "the values
++// are precise to less than 1/20 of a second only. The underlying DOS
++// function has 1/20 second granularity, as it is calculated from the
++// 55 ms timer tick count." A true ~66.67ms frame therefore always spans
++// one or two 54.9ms ticks and, reported in hundredths, reads back as
++// 50/60ms or 100/110ms -- which is exactly the fps_p50=16.67 /
++// fps_p95=9.09 pair every real-hardware run reported, bit-for-bit
++// identically, across three video cards and three CPUs
++// (docs/PACER-TIMING-INVESTIGATION.md), and what tests/probes/pacesim.c
++// reproduced in isolation with no SDL, rendering or audio present. The
++// percentiles were measuring the ruler, not the game. The near-zero
++// samples 0034's original filter was written against were the same
++// clock returning the same tick twice.
++//
++// SDL_GetTicksNS() is the clock the pacer itself converges against, so
++// pacing and measurement now share one clock family (the doskutsu
++// precedent, see docs/timing.md). Its one known hazard is that uclock()
++// is not monotonic on real DOS hardware (~1 corrupt sample per 1800
++// frames, SDL/0136's YIELDDBG data): a backwards step reads as a huge
++// delta if treated as unsigned. Both bounds guard that. The lower one
++// (still 1ms: no real paced period can be shorter than that, let alone
++// a frame's worth of work) catches the zero/negative side; the upper
++// one catches the wraparound side. Anything outside is counted and
++// reported in the exit block, never silently dropped.
+ #define DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S 0.001
++#define DOS_PORT_FRAME_TIME_MAX_PLAUSIBLE_S 5.0
+ 
+ static int dosPortCompareFrameTimes( const void *inA, const void *inB ) {
+     double a = *(const double *)inA;
+@@ -1156,6 +1162,14 @@ char playGame() {
+     // count is visible data rather than a hidden correction.
+     int frameTimeRejectedNonPositive = 0;
+     int frameTimeRejectedTooSmall = 0;
++    int frameTimeRejectedTooLarge = 0;
++
++    // DOS-PORT: the previous frame's post-pacer SDL_GetTicksNS() reading,
++    // for the paced-period capture at the bottom of the loop. 0 means "no
++    // previous frame yet": the first iteration has no period to report
++    // and captures nothing (a delta back to before the title-screen wait
++    // would not be a frame period anyway).
++    Uint64 dosLastPacedTicksNS = 0;
+ #endif
+ 
+     int titleFadeFrame = 0;
+@@ -1856,36 +1870,49 @@ char playGame() {
+ 
+ #ifdef __DJGPP__
+         // DOS-PORT: capture the full paced period -- the delta between
+-        // this and the PREVIOUS "start timing next frame" timestamp, both
+-        // taken AFTER their own pacer sleep -- for the RUNMANIFEST
+-        // percentile buffer. Patch 0034 captured `frameTime` (pure work
+-        // time, above) here instead; that quantity excludes every frame's
+-        // own sleep by construction, so it is structurally >= 15fps
+-        // whenever the pacer has any slack to spend (this rig always
+-        // does in steady state) and cannot expose a pacer stall, which is
+-        // the whole point of a stall-catching p95. The paced period sits
+-        // at ~1/lockedFrameRate (~66.67ms) in steady state -- the pacer
+-        // pads work time up to that budget every frame -- and only grows
+-        // past it on a genuine stall, which is the actual "5% of frames
+-        // were slower" shape p95 needs. Same reject-filter as before,
+-        // applied to this quantity now instead of `frameTime` -- see
+-        // DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S's own comment.
+-        double pacedPeriodTimestamp = Time::getCurrentTime();
+-        double pacedPeriod = pacedPeriodTimestamp - lastFrameTimeStamp;
+-
+-        if( pacedPeriod <= 0.0 ) {
+-            frameTimeRejectedNonPositive ++;
+-            }
+-        else if( pacedPeriod < DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S ) {
+-            frameTimeRejectedTooSmall ++;
+-            }
+-        else if( frameTimeSampleCount < DOS_PORT_FRAME_TIME_SAMPLE_CAP ) {
+-            frameTimeSamples[ frameTimeSampleCount ] = pacedPeriod;
+-            frameTimeSampleCount ++;
++        // this and the PREVIOUS post-pacer reading, both taken AFTER
++        // their own pacer sleep -- for the RUNMANIFEST percentile buffer.
++        // In steady state this sits at ~1/lockedFrameRate (~66.67ms),
++        // because the pacer pads work time up to that budget every frame,
++        // and only grows past it on a genuine stall: the "5% of frames
++        // were slower" shape a stall-catching p95 needs.
++        //
++        // Read on SDL's timebase, not Time::getCurrentTime(). Patch 0035
++        // borrowed the latter's single read for both this capture and the
++        // pacer's lastFrameTimeStamp; that clock has 55ms granularity and
++        // turned every run's percentiles into the same two constants --
++        // see DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S's comment for the full
++        // story. Signed delta, same as every other uclock()-derived
++        // difference in this file: a non-monotonic reading must land in
++        // a reject bucket, never in the buffer as a 2^64-scale "period".
++        const Uint64 pacedNowNS = SDL_GetTicksNS();
++
++        if( dosLastPacedTicksNS != 0 ) {
++            const Sint64 pacedPeriodNS =
++                (Sint64)pacedNowNS - (Sint64)dosLastPacedTicksNS;
++            const double pacedPeriod =
++                (double)pacedPeriodNS / (double)SDL_NS_PER_SECOND;
++
++            if( pacedPeriod <= 0.0 ) {
++                frameTimeRejectedNonPositive ++;
++                }
++            else if( pacedPeriod < DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S ) {
++                frameTimeRejectedTooSmall ++;
++                }
++            else if( pacedPeriod > DOS_PORT_FRAME_TIME_MAX_PLAUSIBLE_S ) {
++                frameTimeRejectedTooLarge ++;
++                }
++            else if( frameTimeSampleCount < DOS_PORT_FRAME_TIME_SAMPLE_CAP ) {
++                frameTimeSamples[ frameTimeSampleCount ] = pacedPeriod;
++                frameTimeSampleCount ++;
++                }
+             }
++        dosLastPacedTicksNS = pacedNowNS;
+ 
+-        // start timing next frame
+-        lastFrameTimeStamp = pacedPeriodTimestamp;
++        // start timing next frame -- the pacer's own frameTime keeps
++        // reading Time::getCurrentTime(), exactly as it did before patch
++        // 0035 shared this read with the percentile capture.
++        lastFrameTimeStamp = Time::getCurrentTime();
+ #else
+         // start timing next frame
+         lastFrameTimeStamp = Time::getCurrentTime();
+@@ -2245,10 +2272,12 @@ char playGame() {
+     // a finding (see DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S's own comment),
+     // not something to correct quietly out of the percentile inputs.
+     printf( "Frame-time samples: %d used, %d rejected non-positive, "
+-            "%d rejected below %.3fs\n",
++            "%d rejected below %.3fs, %d rejected above %.1fs\n",
+             frameTimeSampleCount, frameTimeRejectedNonPositive,
+             frameTimeRejectedTooSmall,
+-            (double)DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S );
++            (double)DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S,
++            frameTimeRejectedTooLarge,
++            (double)DOS_PORT_FRAME_TIME_MAX_PLAUSIBLE_S );
+ #endif
+ 
+     fflush( stdout );
+-- 
+2.47.3
+
