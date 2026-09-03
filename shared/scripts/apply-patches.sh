@@ -55,6 +55,11 @@ MANIFEST="$REPO_ROOT/vendor/sources.manifest"
 VENDOR_DIR="$REPO_ROOT/vendor"
 PATCHES_DIR="$REPO_ROOT/patches"
 
+# readlink -f, not $0's dirname: a port invokes this through the symlink at
+# its own scripts/apply-patches.sh, so BASH_SOURCE is that symlink.
+# shellcheck source=./series-sha.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/series-sha.sh"
+
 FILTER=""
 if [[ $# -gt 0 ]]; then
     case "$1" in
@@ -179,6 +184,15 @@ apply_one() {
     if ! apply_patch_dir "$vendor_path" "$patches_path" "patch series" "$name"; then
         return 1
     fi
+
+    # Record what was actually applied, so verify-patches-applied.sh can
+    # later catch a patch file edited in place without being re-applied --
+    # which the count comparison alone cannot see. See series-sha.sh.
+    local stamp
+    stamp="$(series_sha_path "$REPO_ROOT" "$name")"
+    mkdir -p "${stamp%/*}"
+    series_sha "$patches_path" > "$stamp"
+    log "$name: recorded series fingerprint $(cut -c1-12 < "$stamp")"
 }
 
 # Walk the manifest
