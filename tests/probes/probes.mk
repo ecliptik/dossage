@@ -16,6 +16,7 @@
 #   make probes            # build every probe below
 #   make probe-dlygran     # build just DLYGRAN.EXE
 #   make probe-clkscale    # build just CLKSCALE.EXE
+#   make probe-pacesim     # build just PACESIM.EXE
 #   make probes-clean
 
 PROBES_DIR       := $(REPO_ROOT)/tests/probes
@@ -41,7 +42,11 @@ PROBE_clkscale_SRC  := $(PROBES_DIR)/clkscale.c
 PROBE_clkscale_EXE  := $(PROBES_BUILD_DIR)/CLKSCALE.EXE
 PROBE_clkscale_LIBS := -lm
 
-PROBES := dlygran clkdrift clkscale
+PROBE_pacesim_SRC  := $(PROBES_DIR)/pacesim.c
+PROBE_pacesim_EXE  := $(PROBES_BUILD_DIR)/PACESIM.EXE
+PROBE_pacesim_LIBS := -lm
+
+PROBES := dlygran clkdrift clkscale pacesim
 
 $(PROBES_BUILD_DIR):
 	mkdir -p $(PROBES_BUILD_DIR)

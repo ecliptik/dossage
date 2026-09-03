@@ -199,3 +199,152 @@ does; its per-DOS-call cost is also ~100ms of emulated time, which trips
 the resolution gate. Neither is representative. Per this repo's rule,
 DOSBox-X is never a performance proxy -- the real answer comes only from
 a real-hardware run (486DX2-66 rig, via vcctrl).
+
+## pacesim -- standalone deadline-pacer + gettimeofday() paced-period capture
+
+Answers: does dossage's game.cpp deadline pacer, run in total isolation
+(no SDL, no rendering, no audio, no engine), reproduce the bimodal
+fps_p50=16.67 (60ms) / fps_p95=9.09 (110ms) paced-period clusters that
+every real-hardware run since patch `patches/passage/0035` has reported,
+unmoved across 3 video chip vendors and 3 CPUs (2 Intel, 1 AMD, ~33%
+clock-speed spread)? See `docs/PACER-TIMING-INVESTIGATION.md` for the
+full question, evidence table, and why the other three probes here don't
+already answer it.
+
+**The mechanism this probe targets**, found by reading `game.cpp` itself
+(not guessed): the DJGPP pacer and its RUNMANIFEST measurement use TWO
+DIFFERENT CLOCKS. The absolute-deadline pacer (`game.cpp` ~1658-1847)
+converges on `dosNextFrameDeadlineNS` using `SDL_GetTicksNS()` --
+uclock()/PIT-timebase on this backend -- landing tightly on a true
+~66.6667ms period. Patch 0035's RUNMANIFEST capture (`game.cpp`
+~1857-1888) measures the delta between consecutive frame timestamps using
+`Time::getCurrentTime()` -- gettimeofday(), ms-truncated -- a completely
+separate clock read from the one the pacer just converged against. The
+hypothesis: if gettimeofday() free-runs at some granularity coarser than
+the pacer's convergence precision (a BIOS/PIT tick, ~54.9255ms, is the
+working hypothesis in the investigation brief -- 2x that is 109.85ms, a
+close match for the observed ~110ms cluster), a smooth, tightly-converged
+~66.67ms period would be measured by gettimeofday() as one of a small
+fixed set of values, determined by clock-boundary PHASE rather than
+anything about the real hardware -- explaining both why there are exactly
+two clusters and why they don't move with CPU speed/vendor/video card.
+
+This is deliberately NOT the same question `clkdrift.c` already answered
+(whether gettimeofday() and uclock() agree on AVERAGE RATE -- they do).
+It is whether gettimeofday()'s SAMPLE-TO-SAMPLE behavior across a
+tightly-converged ~66.67ms interval, produced by the SAME deadline-pacer
+structure and constants `game.cpp` actually uses, shows discrete
+clustering. Rate agreement on average is entirely compatible with a
+coarse per-sample quantization.
+
+**Fidelity notes** (see the file header for the full list): the deadline-
+pacer structure and constants (`dosFrameTickNS`, `dosFrameMaxDebtNS`,
+the 3ms spin-handoff, the 0.2ms yield-floor) are reproduced verbatim from
+`game.cpp`. `SDL_GetTicksNS()` is approximated as uclock() rescaled via
+`UCLOCKS_PER_SEC` -- valid for dossage specifically, since it never runs
+the SDL/0122 GUS/AdLib pump timebase that would otherwise change this.
+The pacer's final-approach loop (`SDL_Delay(0)`, DOS_Yield()-only) has no
+standalone equivalent outside SDL/DPMI cooperative scheduling and is
+substituted with a tight uclock() spin-poll -- a fidelity gap for
+absolute interval-length claims, not for the phase-vs-gettimeofday
+question this probe asks. No SB16 DMA audio IRQs, no rendering, no event
+polling (same class of caveat as `dlygran.c`/`clkdrift.c`). Per-frame
+"work" is an optional argv-configurable busy-wait (default 0) so a
+work-free run can be extended with representative work without a
+rebuild.
+
+- Source: `pacesim.c`
+- Binary: `build/probes/PACESIM.EXE` (via `make probe-pacesim`)
+- Log: `PACESIM.LOG` by default, or `<logtag>.LOG` if a third argument is
+  given, written to the working directory the probe runs in
+- Launcher: `pacesim.bat` (copy both files, plus CWSDPMI.EXE, to the
+  target's working dir)
+- Args: `PACESIM.EXE [niter] [work_ms] [logtag]` -- niter default 3000
+  (range 100-50000, ~200s of simulated real time at steady state),
+  work_ms default 0 (range 0-200), logtag optional (alnum/underscore,
+  truncated to 8 chars -- writes `<LOGTAG>.LOG` instead of `PACESIM.LOG`)
+- **Truncate-mode gotcha, hit for real on the first real-hardware round**:
+  like `dlygran.c`/`clkdrift.c`/`clkscale.c`, the log is opened in `"w"`
+  (truncate), not `"a"` -- deliberately kept consistent with those three
+  rather than switched to append, since an unmarked append would silently
+  concatenate unrelated runs into one file with no boundary marker. A
+  WORKMS=0 pass followed by a WORKMS=45 pass in the same directory with
+  no logtag on either invocation silently destroyed the first pass's
+  data before it could be retrieved. Fix: pass a distinct `logtag` per
+  pass (e.g. `PACESIM.EXE 3000 0 W0` then `PACESIM.EXE 3000 45 W45` ->
+  `W0.LOG` and `W45.LOG`, both retrievable afterward), or copy
+  `PACESIM.LOG` out between passes. The probe also checks for a
+  same-named file before truncating and prints a warning to stderr if
+  one already exists, so a same-name clobber is loud rather than silent
+  when a distinct logtag isn't used -- though see the DOSBox-X note
+  below for why that warning couldn't be captured in the emulator smoke.
+- Output includes every raw paced-period sample, min/median/mean/p95/max,
+  a 10ms-bucket histogram (bimodal shape visible without post-processing),
+  pacer branch counts, reject counts (same filter as
+  `DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S`), and fps_p50/fps_p95 computed
+  EXACTLY as `game.cpp`'s RUNMANIFEST emission does -- directly comparable
+  to the real RUNMANIFEST lines in `docs/benchmarks/`.
+
+**DOSBox-X note**: DOSBox-X smoke (150 iterations, `--fast`) confirms the
+probe builds, runs, writes a parseable log with internally-consistent
+arithmetic (reject counts, branch counts, and sample_count all reconcile
+against niter), and does not crash. It also, structurally, reproduces
+clusters at the same 50/60/110ms values the real-hardware anomaly
+reports -- but this was NOT reported as a finding at the time: DOSBox-X's
+own PIT/gettimeofday() emulation is documented elsewhere in this file as
+coarse and non-representative, and this run's own numbers confirmed that
+directly -- a 46% reject rate and 69/150 "resync ahead by more than a
+frame" events, against real hardware's <0.3% reject rate on the
+equivalent RUNMANIFEST capture. Per this repo's standing rule, DOSBox-X
+is a correctness/mechanism gate only, never a performance proxy.
+
+Separately: verifying the pre-truncate stderr warning (above) under
+DOSBox-X headless capture ran into an unrelated, pre-existing limitation
+-- real DOS `COMMAND.COM` does not understand `N>` (numbered-handle)
+redirection syntax at all, only plain `>`/`>>`/`<`, so a batch line like
+`PACESIM.EXE ... 2> ERR.TXT` does not do what it looks like it does: `2`
+becomes a literal token DJGPP's own arg/redirection parser doesn't
+recognize either, and the LAST bare `>` on the line wins for stdout,
+leaving an earlier `>` target created but empty. This is the same class
+of issue as this repo's `dosbox-run.sh --merge-stderr` flag (see
+`docs/` / that script's own header comment claiming DJGPP handles
+`2>&1` -- observed behavior here says otherwise; worth a note to
+whoever maintains that shared script, not something to fix from this
+port-local README). Not a pacesim bug -- the plain-`>`-only invocations
+used for the actual argv[3]/logtag verification above worked correctly.
+
+**Real-hardware result (2026-09-03, Am5x86-133 + Mach64, via vcctrl-c3)**:
+both requested passes ran. Pass 2 (WORKMS=45, complete: n=2992,
+reject_rate=0.2667% -- close to real game runs' 0.27-0.29%) reproduced
+fps_p50=16.67/fps_p95=9.09 exactly, with a histogram showing two islands
+(a ~40-70ms cluster and a ~90-120ms cluster, near-total gap 70-90ms).
+Checking the actual raw per-sample data (not just the aggregated
+histogram) against a falsifiable exact-10ms-multiple prediction found
+zero exceptions across all 256 printed samples -- every value is exactly
+one of {50, 60, 100, 110, 330}ms; the apparent island "width" is a
+histogram-bucket-boundary artifact (bucket edges sit exactly on the true
+values, so ordinary float/truncation noise scatters samples into the
+adjacent decade bucket), not real spread. Pass 1 (WORKMS=0, partial --
+lost to the truncate-mode gotcha above before the logtag fix landed)
+matched on every figure that could be compared: same fps_p50/fps_p95,
+similar band fractions. See `docs/PACER-TIMING-INVESTIGATION.md` for the
+full writeup, root-cause verdict, and the exact mechanism (traced to
+DOS's INT 21h AH=2Ch hundredths-of-a-second clock).
+
+**A real bug this same raw-data check surfaced, since fixed**: pass 2's
+reported mean (68.2152ms) was measurably inflated by this probe's OWN
+per-line `fsync()` during its first 200 iterations (full resolution)
+versus every-50th afterward -- each `fsync()` call happens inside the
+timed measurement loop, so 200 densely-packed fsync calls measurably
+perturbed exactly the iterations that paid for them (52% landed in the
+~110ms/2-tick band during i<200 vs. 23% after, and both of the run's
+~330ms stall outliers landed at i=80/i=196, both inside that window).
+Fixed: fsync is now throttled to a uniform per-call cadence
+(`FSYNC_EVERY_N_CALLS` in `pacesim.c`) instead of tracking the raw-sample
+print density, with an explicit final sync on every exit path so
+durability at the end of a run is unaffected. Not yet re-verified on real
+hardware post-fix (the analytical/data-driven case for the diagnosis is
+strong enough that this wasn't treated as blocking -- see
+`docs/PACER-TIMING-INVESTIGATION.md`'s RESOLVED section for the full
+reasoning); a future real-hardware pass would be expected to show a mean
+closer to the analytically-predicted ~66.68ms.
