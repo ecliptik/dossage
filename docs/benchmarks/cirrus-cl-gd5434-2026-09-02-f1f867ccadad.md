@@ -53,6 +53,26 @@ Audio underruns: not instrumented. Two `vcctrl_audio_verdict` checks,
   both `AUDIO_PRESENT`.
 Peak memory: not measured.
 Notes:
+- **AUDIO-TIER MISMATCH BUG, found 2026-09-03 -- affects this run,
+  correcting the record rather than leaving it implicit.** The committed
+  `vendor/passage/gameSource/music/SONG.WAV` is the low-tier render
+  (11025Hz mono, 2998844 bytes), but this build used `AUDIO_TIER=high`
+  (22050Hz stereo). `musicPlayer.cpp` loads the WAV via `SDL_LoadWAV()`
+  but never uses the returned spec -- `audioFormat.freq`/`channels` come
+  from the compile-time tier constants instead, so a mismatched file
+  plays at the wrong rate (that exact failure mode, "wrong-speed,
+  wrong-pitch playback," is documented in that file's own code comment).
+  Confirmed present on the physical target (`DIR` = 2,998,844 bytes) and
+  in this build's `build/stage/`. **`AUDIO_PRESENT` below only confirms
+  audio was playing, not that it played at the correct pitch/tempo.** fps
+  is not expected to be affected (the audio-pump callback processes the
+  same byte count per pump call regardless of what the bytes represent),
+  not independently confirmed either. `build_sha12` does not cover this
+  -- it hashes the vendor tree's committed (always-low-tier) file, not
+  what actually gets staged, so this bug is invisible to the build
+  fingerprint. Fix in progress (`15fps` session, patches `0036`/`0037`
+  plus a hard `make stage` guard, separate `dx2-50-15fps` worktree, not
+  yet landed in this tree).
 - **PASS, second confirmation.** 14.768977fps is 0.171fps from the
   ~14.94fps reference -- inside the 0.3fps band, consistent with the
   first Cirrus run's 14.817881fps (`cirrus-cl-gd5434-2026-09-02.md`).

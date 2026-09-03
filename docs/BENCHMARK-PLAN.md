@@ -7,6 +7,22 @@ doc originally declined to cover (see "The matrix" below and the CPU-tier
 table added there) -- 486DX2-50 + Mach64 is the first cell of that
 expansion, in progress.
 
+**AUDIO-TIER MISMATCH BUG, found 2026-09-03, affects every recorded result
+in this campaign.** The committed `vendor/passage/gameSource/music/SONG.WAV`
+is the low-tier render (11025Hz mono), but every build/run this campaign
+used `AUDIO_TIER=high` (22050Hz stereo) -- `musicPlayer.cpp` never checks
+the loaded WAV's actual spec against the compile-time tier, so the mismatch
+plays at the wrong rate ("wrong-speed, wrong-pitch playback," per that
+file's own code comment). Confirmed on the physical target for every leg
+(`DIR` = 2,998,844 bytes, the wrong file). `AUDIO_PRESENT` verdicts
+throughout this doc and every `docs/benchmarks/` file confirm audio was
+playing, never that it played correctly -- read them that way. Does not
+affect any recorded fps number (the audio-pump callback's per-frame cost
+is byte-count-driven, not content-driven), but is not yet independently
+confirmed. `build_sha12` does not cover this bug at all -- see each
+benchmark file's own Notes for the full mechanism and the fix in progress
+(`15fps` session, patches `0036`/`0037` + a hard `make stage` guard).
+
 ## What kind of campaign this is
 
 **This is a characterization campaign, not an optimization campaign.** That
@@ -224,7 +240,7 @@ started with Mach64 first on 486DX2-50 since it's already staged and its
 | CPU | Card | State |
 |---|---|---|
 | 486DX2-50 | ATI Mach64 215CT/-ET | **First datum 2026-09-03: 13.685015 fps** (build `f1f867ccadad`). No reference to compare against. See `docs/benchmarks/mach64-215ct-486dx2-50-2026-09-03.md`. |
-| Am5x86-133 | ATI Mach64 215CT/-ET | **First datum 2026-09-03: 15.016779 fps** (build `f1f867ccadad`) -- fastest of the campaign, essentially at the design ceiling. **CPU identity has an open caveat**: dinspect read `~100MHz`/`FPU: no`; FPU presence independently confirmed via a functional gate (clean launch + correct float-heavy execution -- a genuinely FPU-less chip would very likely have crashed), but the 133 vs. ~100MHz speed question is not independently resolved. See `docs/benchmarks/mach64-215ct-am5x86-2026-09-03.md`. |
+| Am5x86-133 | ATI Mach64 215CT/-ET | **First datum 2026-09-03: 15.016779 fps** (build `f1f867ccadad`) -- fastest of the campaign, essentially at the design ceiling. CPU identity's `~100MHz`/`FPU: no` dinspect reading was chased down and confirmed as two real dinspect detection bugs (stale INT 11h FPU bit, over-generic AMD speed table), both fixed upstream same day -- the chip really is a working Am5x86-133. See `docs/benchmarks/mach64-215ct-am5x86-2026-09-03.md`. |
 
 ### Mach64 gate -- do this before treating any Mach64 number as a datum
 
@@ -348,8 +364,10 @@ the root cause, and it sat unrecognised in a log for hours.
   Unrelated to fps; note it if it recurs per-card. **Recurred on the Cirrus
   leg, 2026-09-02** (capture stick briefly lost lock, resolved via the
   hardware camera to a clean prompt) -- second confirmed occurrence.
-- **`fps_p50`/`fps_p95` measure the wrong window -- RESOLVED (explained,
-  fix not yet landed) 2026-09-02.** Both fields still cluster above the
+- **`fps_p50`/`fps_p95` measure the wrong window, AND the underlying
+  clock artifact -- BOTH ROOT-CAUSED, 2026-09-03. See the closing
+  paragraph at the end of this entry for the final answer; the rest is
+  kept as the historical chase that got there.** Both fields still cluster above the
   15fps design ceiling on real hardware (e.g. `fps_p50=fps_p95=16.67` in
   the Cirrus run) even after the reject-filter fix. **Not a clock bug --
   a definitional one, root-caused from the actual code, not measurement
@@ -446,17 +464,49 @@ the root cause, and it sat unrecognised in a log for hours.
   game) -- two independent sessions (build-qa, vcctrl-c3) both converged
   on recommending this rather than guessing further from full-game data,
   and the evidence now makes it more likely to actually land somewhere
-  specific rather than come back inconclusive. Not performed as part of
-  this campaign -- **written up as a standalone, self-contained
-  investigation brief for whoever picks it up next**:
-  `docs/PACER-TIMING-INVESTIGATION.md`. It covers this repo's existing
-  `tests/probes/{dlygran,clkdrift,clkscale}.c` suite (already has real
-  486DX2-66 results, none of which explain this specific finding -- read
-  why, not just that, before starting) and a prioritized action list
-  (that file should be updated with this 5th-axis data point too, not
-  done as part of this record). Full data:
+  specific rather than come back inconclusive. Written up as a
+  standalone, self-contained investigation brief:
+  `docs/PACER-TIMING-INVESTIGATION.md`. Full data:
   `docs/benchmarks/cirrus-cl-gd5434-2026-09-02-f1f867ccadad.md`,
   `docs/benchmarks/virge-86c375-2026-09-03.md`,
   `docs/benchmarks/mach64-215ct-2026-09-03.md`,
   `docs/benchmarks/mach64-215ct-486dx2-50-2026-09-03.md`,
   `docs/benchmarks/mach64-215ct-am5x86-2026-09-03.md`.
+
+  **ROOT CAUSE CONFIRMED, 2026-09-03, `docs/PACER-TIMING-INVESTIGATION.md`
+  ("RESOLVED" section).** Not a hardware timer in the vague sense
+  guessed above, but specifically: DJGPP's `gettimeofday()` (what
+  `Time::getCurrentTime()` calls) derives its entire sub-second
+  resolution from DOS's own hundredths-of-a-second clock (`INT 21h
+  AH=2Ch`), which is itself driven by the 18.2065Hz BIOS/PIT tick --
+  confirmed two independent ways: DJGPP's official libc reference
+  documentation (states exactly this), and disassembly of this port's
+  actual compiled `libc.a` (`gettimeo.o`) confirming the binary really
+  executes that path. Since 100Hz doesn't divide evenly into 18.2065Hz,
+  the tick-to-hundredths conversion advances unevenly, and the pacer's
+  genuinely-consistent ~66.6667ms delivered period (converged against a
+  *different* clock, `uclock()`/`SDL_GetTicksNS()`) always spans either 1
+  or 2 ticks -- collapsing every `gettimeofday()`-measured sample onto
+  ~55ms or ~110ms depending on tick phase, regardless of card, CPU speed,
+  or CPU vendor, because the true period being measured is itself
+  hardware-independent by the pacer's own design. **Exactly confirmed**
+  against real `PACESIM.LOG` raw per-sample data (not just a bucketed
+  histogram): all 256 checked samples are exactly one of {50, 60, 100,
+  110, 330}ms, zero exceptions -- DOS's hundredths counter advances by 5
+  or 6 per BIOS tick in a near-deterministic alternating pattern, so
+  2-tick readings land almost entirely on exactly 110ms rather than a
+  spread. (An earlier pass here cited 55.13ms/109.59ms "island centers"
+  computed from coarse histogram-bucket midpoints -- superseded by this
+  exact check, corrected per this project's own discipline rather than
+  left stale.) Reproduces in complete isolation (`tests/probes/pacesim.c`, no SDL, no
+  rendering, no audio, no engine) -- rules out anything full-game-
+  specific. **Fix implemented, DOSBox-X-confirmed, not yet on `main` or
+  real-hardware-validated**: `patches/passage/0036`, committed `60ad807`
+  on branch `dx2-50-15fps` (isolated worktree
+  `/home/claude/git/dossage-dx2-50`), re-bases the capture onto
+  `SDL_GetTicksNS()` -- the pacer's own clock -- instead of
+  `gettimeofday()`. DOSBox-X smoke (correctness only) across three builds
+  shows `fps_p50` collapsed from `16.67` to exactly `15.00` (the design
+  ceiling), `fps_p95` now `14.77-14.83`, reject rates 0-1/4475. Pending
+  Round 1: the physical CPU swapped back to 486DX2-50 and real-hardware
+  confirmation.
