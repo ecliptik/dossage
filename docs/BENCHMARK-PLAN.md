@@ -1,6 +1,11 @@
 # DOSSAGE benchmark plan -- 486DX2-66 video-card matrix
 
-Written against the hub's `benchmark` skill. Status: **not yet run.**
+Written against the hub's `benchmark` skill. Status: **486DX2-66 video-card
+matrix complete (2026-09-03)** -- Cirrus, ViRGE, and Mach64 all measured.
+**Scope expanded 2026-09-03, operator-directed, into a CPU dimension** this
+doc originally declined to cover (see "The matrix" below and the CPU-tier
+table added there) -- 486DX2-50 + Mach64 is the first cell of that
+expansion, in progress.
 
 ## What kind of campaign this is
 
@@ -36,6 +41,16 @@ The port is *pacer-bound*, not compute-bound. `docs/optimization.md`'s
 bottleneck list is the wrong tool here; `docs/timing.md`'s pacer material is
 the right one. Re-check this if the CPU ever changes -- the regime can shift
 between campaigns -- but on this CPU it is settled.
+
+**The CPU changed, 2026-09-03 -- this needs re-checking, not yet done.**
+486DX2-50 + Mach64's first datum came back at 13.685015fps, a real drop
+from the ~14.77-14.82fps band every 486DX2-66 run landed in -- the first
+evidence this port may no longer be comfortably pacer-bound at this slower
+tier. **Not yet confirmed**: re-running the compute-bound gate (real
+per-frame work vs. the 66.67ms budget, on this CPU specifically) hasn't
+happened. Don't assume either regime for 486DX2-50 -- measure it before
+drawing conclusions from any 486DX2-50 result. See
+`docs/benchmarks/mach64-215ct-486dx2-50-2026-09-03.md`.
 
 ## Pre-campaign work item: the KPI needs percentiles (CLOSED 2026-09-02)
 
@@ -175,14 +190,41 @@ per the paragraph above. Full result: `docs/benchmarks/cirrus-cl-gd5434-2026-09-
 
 ## The matrix
 
-One CPU (486DX2-66), one sound card (PicoGUS, SB mode), three video cards.
-**Not a full cross-product** -- there is no reason to re-sweep CPU or audio.
+Originally written as one CPU (486DX2-66), one sound card (PicoGUS, SB
+mode), three video cards ("not a full cross-product -- there is no reason
+to re-sweep CPU or audio"). **That CPU-scoping decision was reversed
+2026-09-03, operator-directed**: the audio-fixed, card-varying part of that
+reasoning still holds (no reason to re-sweep PicoGUS/SB mode), but CPU is
+now an active second dimension. Reason it's worth doing, now that there's
+real data: 486DX2-66 numbers all landed near the pacer ceiling
+(~14.77-14.82fps across all three cards) precisely because that CPU has
+slack to spare -- a genuinely different, slower CPU is exactly the case
+Section 1's compute-bound gate exists to catch a regime change in, and the
+first 486DX2-50 datum already shows one (see Section 1, above).
+
+### 486DX2-66 video-card matrix (complete)
 
 | Card | State | What this run is for |
 |---|---|---|
 | Cirrus CL-GD5434 | **re-confirmed 2026-09-02, twice: 14.82 fps (`9c90db0e7905`), 14.77 fps (`f1f867ccadad`)** | Reference/repeatability. Runs banked -- SDL/0019 force-disables LFB for a genuine aperture defect. Two runs, two different builds, both in-band -- see `docs/benchmarks/cirrus-cl-gd5434-2026-09-02.md` and `...-f1f867ccadad.md`. |
 | S3 ViRGE 86C375 | **re-confirmed 2026-09-03, 14.82 fps** (build `f1f867ccadad`) | Reference/repeatability. Uses LFB at 320x240x16 -- see `docs/benchmarks/virge-86c375-2026-09-03.md`. |
 | ATI Mach64 215CT/-ET | **Gate passed, first datum 2026-09-03: 14.77 fps** (build `f1f867ccadad`) | Gated and measured -- see below and `docs/benchmarks/mach64-215ct-2026-09-03.md`. No established reference to compare against (only prior figure is a different CPU tier, pre-pacer-work). |
+
+### CPU-tier expansion (in progress, started 2026-09-03)
+
+Roster from `profiles/dossage.yaml`'s `machines` table / the hub's
+`HARDWARE.md` primary matrix: 486DX2-66 (done, above), 486DX2-50 (dossage's
+own tracked `dos_minimum_target`/`dos_recommended_target` per the hub's
+`ports.yaml` -- in progress), Am5x86-133 (not started), Pentium OverDrive 83
+(has only pre-pacer-work data, not comparable, not started under the
+current build). Each CPU swap needs its own video-card sweep in principle;
+started with Mach64 first on 486DX2-50 since it's already staged and its
+`SDL_HINT_DOS_FORCE_MODE_ID` requirement is confirmed CPU-independent.
+
+| CPU | Card | State |
+|---|---|---|
+| 486DX2-50 | ATI Mach64 215CT/-ET | **First datum 2026-09-03: 13.685015 fps** (build `f1f867ccadad`). No reference to compare against. See `docs/benchmarks/mach64-215ct-486dx2-50-2026-09-03.md`. |
+| Am5x86-133 | ATI Mach64 215CT/-ET | **First datum 2026-09-03: 15.016779 fps** (build `f1f867ccadad`) -- fastest of the campaign, essentially at the design ceiling. **CPU identity has an open caveat**: dinspect read `~100MHz`/`FPU: no`; FPU presence independently confirmed via a functional gate (clean launch + correct float-heavy execution -- a genuinely FPU-less chip would very likely have crashed), but the 133 vs. ~100MHz speed question is not independently resolved. See `docs/benchmarks/mach64-215ct-am5x86-2026-09-03.md`. |
 
 ### Mach64 gate -- do this before treating any Mach64 number as a datum
 
@@ -375,13 +417,46 @@ the root cause, and it sat unrecognised in a log for hours.
   framebuffer-write path; same two clusters across three unrelated chip
   vendors rules out anything card-specific at all. What's left constant
   across all three runs is the CPU (486DX2-66) and the build -- pointing
-  squarely at a CPU/system-timer-level mechanism. Still doesn't pin down
+  squarely at a CPU/system-timer-level mechanism.
+
+  **Strengthened further, same day: also confirmed CPU-clock-speed-
+  independent.** The 486DX2-50+Mach64 run (see CPU-tier expansion, above)
+  produced the exact same `fps_p50=16.67`/`fps_p95=9.09` -- bit-for-bit
+  identical to every 66MHz run -- despite the plain average moving a full
+  1.1fps (14.77 -> 13.69) between the two CPU tiers. A ~24% CPU clock
+  difference changing the real average but leaving these two specific
+  values completely untouched is hard to explain with any CPU-cycle-count
+  -based mechanism (expected to scale with clock speed) and is strong,
+  independent evidence for a fixed-frequency **hardware timer** cause
+  (e.g. the PC BIOS/PIT tick, driven by its own oscillator, not the CPU
+  clock) over a workload- or CPU-speed-dependent one.
+
+  **Fifth-axis confirmation, same day: a third, non-Intel CPU vendor.**
+  The Am5x86-133+Mach64 run produced the identical
+  `fps_p50=16.67`/`fps_p95=9.09` yet again -- this time on an AMD part
+  (vs. the two Intel 486DX2 tiers), and the fastest plain average of the
+  entire campaign (15.02fps, essentially at the design ceiling) sitting
+  right next to the exact same two unchanged percentile values. 5
+  independent axes now agree exactly: 3 video chip vendors x 3 CPUs
+  (486DX2-66, 486DX2-50, Am5x86-133) spanning both Intel and AMD and a
+  13.69-15.02fps range in the actual average. Still doesn't pin down
   either cluster's exact source (110ms plausibly 2x the PC BIOS/PIT
-  tick, ~54.925ms; 60ms unidentified). **Queued as a standalone
+  tick, ~54.925ms; 60ms unidentified) -- **queued as a standalone
   `Time::getCurrentTime()`/pacer-timing probe** (isolated from the full
   game) -- two independent sessions (build-qa, vcctrl-c3) both converged
-  on recommending this rather than guessing further from full-game data.
-  Not performed as part of this campaign. Full data:
+  on recommending this rather than guessing further from full-game data,
+  and the evidence now makes it more likely to actually land somewhere
+  specific rather than come back inconclusive. Not performed as part of
+  this campaign -- **written up as a standalone, self-contained
+  investigation brief for whoever picks it up next**:
+  `docs/PACER-TIMING-INVESTIGATION.md`. It covers this repo's existing
+  `tests/probes/{dlygran,clkdrift,clkscale}.c` suite (already has real
+  486DX2-66 results, none of which explain this specific finding -- read
+  why, not just that, before starting) and a prioritized action list
+  (that file should be updated with this 5th-axis data point too, not
+  done as part of this record). Full data:
   `docs/benchmarks/cirrus-cl-gd5434-2026-09-02-f1f867ccadad.md`,
   `docs/benchmarks/virge-86c375-2026-09-03.md`,
-  `docs/benchmarks/mach64-215ct-2026-09-03.md`.
+  `docs/benchmarks/mach64-215ct-2026-09-03.md`,
+  `docs/benchmarks/mach64-215ct-486dx2-50-2026-09-03.md`,
+  `docs/benchmarks/mach64-215ct-am5x86-2026-09-03.md`.
