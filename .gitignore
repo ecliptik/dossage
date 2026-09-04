@@ -72,3 +72,8 @@ venv/
 *.SWP
 DEBUG.LOG
 SETTINGS.DAT
+
+# Real-hardware raw run logs behind docs/benchmarks/ -- large, per-machine,
+# deliberately untracked; only the README explaining the layout is kept.
+/rawlogs/*
+!/rawlogs/README.md
