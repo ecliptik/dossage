@@ -226,8 +226,38 @@ CWSDPMI_EXE  := $(REPO_ROOT)/vendor/cwsdpmi/cwsdpmi.exe
 # every copy made from it is out of compliance.
 CWSDPMI_DOC  := $(REPO_ROOT)/vendor/cwsdpmi/cwsdpmi.doc
 
+# DOS-PORT: the WAV's format must match the binary's compiled-in tier.
+# musicPlayer.cpp ignores the WAV header and copies raw samples at the
+# tier's rate/channel count, so a mismatch is not an error message but
+# wrong-speed, wrong-pitch music (a mono 11025Hz file under a 22050Hz
+# stereo binary plays 4x fast, two octaves up). The committed SONG.WAV is
+# the LOW-tier render (patch 0024), and nothing re-renders it when
+# AUDIO_TIER changes -- so a plain `make stage` at the default high tier
+# shipped exactly that mismatch (found 2026-09-03, main tree's
+# build/stage). Fail loudly instead.
+SONG_WAV := $(PASSAGE_SRC)/music/SONG.WAV
+ifeq ($(AUDIO_TIER),low)
+    SONG_WAV_EXPECT_CH   := 1
+    SONG_WAV_EXPECT_RATE := 11025
+else
+    SONG_WAV_EXPECT_CH   := 2
+    SONG_WAV_EXPECT_RATE := 22050
+endif
+
+.PHONY: check-song-tier
+check-song-tier:
+	@test -f "$(SONG_WAV)" || (echo "error: $(SONG_WAV) missing" >&2; exit 1)
+	@ch=$$(od -An -tu2 -j22 -N2 "$(SONG_WAV)" | tr -d ' '); \
+	 rate=$$(od -An -tu4 -j24 -N4 "$(SONG_WAV)" | tr -d ' '); \
+	 if [ "$$ch" != "$(SONG_WAV_EXPECT_CH)" ] || [ "$$rate" != "$(SONG_WAV_EXPECT_RATE)" ]; then \
+	     echo "error: $(SONG_WAV) is $${ch}ch/$${rate}Hz but AUDIO_TIER=$(AUDIO_TIER) needs $(SONG_WAV_EXPECT_CH)ch/$(SONG_WAV_EXPECT_RATE)Hz" >&2; \
+	     echo "       run: make render-music AUDIO_TIER=$(AUDIO_TIER)   (then re-run make stage)" >&2; \
+	     exit 1; \
+	 fi; \
+	 echo "SONG.WAV: $${ch}ch/$${rate}Hz matches AUDIO_TIER=$(AUDIO_TIER)"
+
 .PHONY: stage
-stage: $(BUILD_DIR)/dossage.exe
+stage: $(BUILD_DIR)/dossage.exe check-song-tier
 	@test -f "$(CWSDPMI_EXE)" || (echo "error: $(CWSDPMI_EXE) missing -- run ./scripts/fetch-vendor-binaries.sh" >&2; exit 1)
 	@test -f "$(CWSDPMI_DOC)" || (echo "error: $(CWSDPMI_DOC) missing -- required by CWSDPMI's redistribution terms; run ./scripts/fetch-vendor-binaries.sh" >&2; exit 1)
 	mkdir -p "$(STAGE_DIR)"

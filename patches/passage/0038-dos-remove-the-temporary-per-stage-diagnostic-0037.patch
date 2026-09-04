@@ -1,0 +1,369 @@
+From 5ab071e228eaf63f1bbc542e0722cf485f202a1a Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 3 Sep 2026 19:29:51 -0700
+Subject: [PATCH] dos: remove the temporary per-stage frame-cost diagnostic
+ (0037)
+
+Removal was planned at landing (patch 0037's own first line), and Round 1
+of the 486DX2-50 campaign has answered the question it existed for. This
+is that removal, and it is the shipping configuration for Round 2's KPI
+binaries; a diagnostic build for Round 2 re-applies 0037's diff locally
+on top of the series, with the CMOS RTC witness added, and is never
+committed.
+
+What 0037 bought, measured on real hardware (486DX2-50 + Mach64, one
+natural life, windows 1-13 of 300 frames, all on the SDL clock):
+
+  render 32.3 ms, blowup 11.9, present 2.4, tail 7.4      = 54 ms of game work
+  engine pump 32.4 ms (3.23 SDL_DOSAudioPump calls at 10.0 ms each)
+  pacer 10.3 ms (every frame over budget: one SDL_Delay(0) yield, i.e.
+  one cooperative audio-thread iterate)                     = 43 ms of audio
+  total 98.8 ms/frame; 4.2 chunks of 23 ms audio produced per frame
+
+Audio conversion (the game's double-multiply callback, then SDL's 16-bit
+to float, stereo to mono, float to 8-bit passes for the PicoGUS's U8
+mono device) is 43% of every frame on this CPU. The low tier does about
+40% of that per chunk and measured 14.79 fps in the same round, right
+at the budget; the high tier measured about 10 fps, with the engine
+clock losing BIOS ticks on every high-tier life (the launch-to-title
+wall clock exceeded Game time by 80-166 s where the low tier showed
+33-60 s, and both WAVs copy in under 8 s). The sampler split was
+2256 hits / 85 misses / 59 transient per frame. The spans summed to
+451.9 s over a life the engine timed at 452 s: nothing unaccounted for.
+
+Everything above is recorded in docs/PLAN.md's measured-constants table
+and the Round 1 benchmark files, so removing the instrumentation costs
+no knowledge. Keeping it would cost a real, if small, per-frame tax, and
+docs/BENCHMARK-PLAN.md's INVALID rule bars any diagnostic from a KPI
+binary.
+
+Patch 0036 (the SDL-clock percentile capture) is untouched.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017TKEXpxndNddTzMQkSdtBX
+---
+ gameSource/World.cpp |  15 ----
+ gameSource/game.cpp  | 181 +------------------------------------------
+ 2 files changed, 2 insertions(+), 194 deletions(-)
+
+diff --git a/gameSource/World.cpp b/gameSource/World.cpp
+index 9a313e2..a77dbea 100644
+--- a/gameSource/World.cpp
++++ b/gameSource/World.cpp
+@@ -371,16 +371,6 @@ char isSpritePresent( int inX, int inY ) {
+ 
+ HashTable<rgbColor> worldSampleHashTable( 30000 );
+ 
+-// DOS-PORT: TEMPORARY DIAGNOSTIC counters (see game.cpp's STAGEDBG.LOG
+-// block) -- how many of the ~2400 sampleFromWorld() calls per frame take
+-// the cache-hit path, the cache-miss path (full sampleFromWorldNoWeight
+-// and insert), or the transient path (sprite/animation/chest pixels,
+-// recomputed every frame by design). Read and reset per window by
+-// game.cpp. Removal planned with that block.
+-int dosPortDiagSampleHits = 0;
+-int dosPortDiagSampleMisses = 0;
+-int dosPortDiagSampleTransient = 0;
+-
+ 
+ void resetSampleHashTable() {
+     worldSampleHashTable.clear();
+@@ -414,7 +404,6 @@ rgbColor sampleFromWorldNoWeightHash( int inX, int inY ) {
+ 
+ 
+     if( found ) {
+-        dosPortDiagSampleHits ++;
+         return sample;
+         }
+     
+@@ -426,12 +415,8 @@ rgbColor sampleFromWorldNoWeightHash( int inX, int inY ) {
+     
+     // insert, but only if not transient
+     if( !transient ) {
+-        dosPortDiagSampleMisses ++;
+         worldSampleHashTable.insert( inX, inY, sample );
+         }
+-    else {
+-        dosPortDiagSampleTransient ++;
+-        }
+     
+     return sample;
+     }
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index 8bb08f1..ed59d03 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -109,115 +109,6 @@ static int dosPortCompareFrameTimes( const void *inA, const void *inB ) {
+         }
+     return 0;
+     }
+-
+-// DOS-PORT: TEMPORARY DIAGNOSTIC (STAGEDBG.LOG) -- per-stage frame cost,
+-// aggregated per 300-frame window. REMOVAL IS PLANNED, NOT OPTIONAL: this
+-// exists to re-run docs/BENCHMARK-PLAN.md's Section 1 compute-bound gate
+-// on the 486DX2-50, where the first datum (13.685fps, 73.1ms/frame) says
+-// the port is no longer pacer-bound, and to split the world-render loop
+-// into cache-hit / cache-miss / transient sample counts so the render
+-// lever can be picked from data. Same discipline as patches 0031/0032:
+-// no per-frame file I/O (one fopen per 300 frames), a handful of
+-// SDL_GetTicksNS() reads per frame (~10, each a PIT read), and every
+-// span on the single SDL clock family.
+-//
+-// Spans, per frame:
+-//   render  = loop top -> after drawScore()   (world sampling + score)
+-//   blowup  = blowupOntoScreenNative()        (set inside flipGameImage..)
+-//   present = presentScreen()                  (VRAM flush)
+-//   pump    = every SDL_DOSAudioPump() call in the engine pump loop
+-//   work    = loop top -> pacer entry          (everything before sleeping)
+-//   pacer   = pacer entry -> post-pacer read   (sleep, or one yield if behind)
+-//   tail    = post-pacer read -> loop end      (game logic, events)
+-//   slack   = pacer's remainingNS at entry     (negative = over budget)
+-struct DosPortDiagWindow {
+-    int frames;
+-    Uint64 renderNS, renderMaxNS;
+-    Uint64 blowupNS, blowupMaxNS;
+-    Uint64 presentNS, presentMaxNS;
+-    Uint64 pumpNS, pumpMaxNS;
+-    int pumpCalls;
+-    Uint64 workNS, workMaxNS;
+-    Uint64 pacerNS, pacerMaxNS;
+-    Uint64 tailNS, tailMaxNS;
+-    Sint64 slackSumNS, slackMinNS;
+-    int overBudget, resyncs;
+-    int hits, misses, transient;
+-    };
+-
+-static struct DosPortDiagWindow dosPortDiag;
+-static int dosPortDiagWindowIndex = 0;
+-static Uint64 dosPortDiagBlowupNS = 0;
+-static Uint64 dosPortDiagPresentNS = 0;
+-
+-// World.cpp's sample-cache counters (see sampleFromWorldNoWeightHash).
+-extern int dosPortDiagSampleHits;
+-extern int dosPortDiagSampleMisses;
+-extern int dosPortDiagSampleTransient;
+-
+-#define DOS_PORT_DIAG_WINDOW_FRAMES 300
+-
+-static void dosPortDiagReset() {
+-    memset( &dosPortDiag, 0, sizeof( dosPortDiag ) );
+-    dosPortDiag.slackMinNS = (Sint64)0x7FFFFFFFFFFFFFFFLL;
+-    dosPortDiagSampleHits = 0;
+-    dosPortDiagSampleMisses = 0;
+-    dosPortDiagSampleTransient = 0;
+-    }
+-
+-static void dosPortDiagAccum( Uint64 *inSum, Uint64 *inMax, Uint64 inNS ) {
+-    *inSum += inNS;
+-    if( inNS > *inMax ) {
+-        *inMax = inNS;
+-        }
+-    }
+-
+-static bool dosPortDiagPump() {
+-    const Uint64 t0 = SDL_GetTicksNS();
+-    const bool result = SDL_DOSAudioPump();
+-    const Uint64 dt = SDL_GetTicksNS() - t0;
+-    dosPortDiagAccum( &dosPortDiag.pumpNS, &dosPortDiag.pumpMaxNS, dt );
+-    dosPortDiag.pumpCalls ++;
+-    return result;
+-    }
+-
+-static void dosPortDiagEmit( const char *inTag ) {
+-    const int n = dosPortDiag.frames;
+-    if( n <= 0 ) {
+-        return;
+-        }
+-    FILE *f = fopen( "STAGEDBG.LOG", "a" );
+-    if( f == NULL ) {
+-        return;
+-        }
+-    const double ms = 1.0 / 1000000.0;
+-    fprintf( f,
+-             "[stage-window w=%d %s frames=%d] "
+-             "render_avg=%.2f render_max=%.2f "
+-             "blowup_avg=%.2f blowup_max=%.2f "
+-             "present_avg=%.2f present_max=%.2f "
+-             "pump_avg=%.2f pump_max=%.2f pump_calls=%d "
+-             "work_avg=%.2f work_max=%.2f "
+-             "pacer_avg=%.2f pacer_max=%.2f "
+-             "tail_avg=%.2f tail_max=%.2f "
+-             "slack_avg=%.2f slack_min=%.2f over_budget=%d resyncs=%d "
+-             "hits=%d misses=%d transient=%d\n",
+-             dosPortDiagWindowIndex, inTag, n,
+-             dosPortDiag.renderNS * ms / n, dosPortDiag.renderMaxNS * ms,
+-             dosPortDiag.blowupNS * ms / n, dosPortDiag.blowupMaxNS * ms,
+-             dosPortDiag.presentNS * ms / n, dosPortDiag.presentMaxNS * ms,
+-             dosPortDiag.pumpNS * ms / n, dosPortDiag.pumpMaxNS * ms,
+-             dosPortDiag.pumpCalls,
+-             dosPortDiag.workNS * ms / n, dosPortDiag.workMaxNS * ms,
+-             dosPortDiag.pacerNS * ms / n, dosPortDiag.pacerMaxNS * ms,
+-             dosPortDiag.tailNS * ms / n, dosPortDiag.tailMaxNS * ms,
+-             (double)dosPortDiag.slackSumNS * ms / n,
+-             (double)dosPortDiag.slackMinNS * ms,
+-             dosPortDiag.overBudget, dosPortDiag.resyncs,
+-             dosPortDiag.hits, dosPortDiag.misses, dosPortDiag.transient );
+-    fclose( f );
+-    dosPortDiagWindowIndex ++;
+-    }
+ #endif
+ 
+ 
+@@ -617,11 +508,9 @@ void flipGameImageOntoScreen( SDL_Surface *inScreen ) {
+             SDL_FillSurfaceRect( inScreen, NULL, 0 );
+             }
+ 
+-        const Uint64 dosDiagBlowupStartNS = SDL_GetTicksNS();
+         blowupOntoScreenNative( gameImage,
+                                 width, totalImageHeight, blowUpFactor,
+                                 inScreen );
+-        dosPortDiagBlowupNS = SDL_GetTicksNS() - dosDiagBlowupStartNS;
+ 
+         if( screenLocked ) {
+             SDL_UnlockSurface( inScreen );
+@@ -633,9 +522,7 @@ void flipGameImageOntoScreen( SDL_Surface *inScreen ) {
+         presentRect.x = ( inScreen->w - presentRect.w ) / 2;
+         presentRect.y = ( inScreen->h - presentRect.h ) / 2;
+ 
+-        const Uint64 dosDiagPresentStartNS = SDL_GetTicksNS();
+         presentScreen( inScreen, &presentRect, blowUpChanged );
+-        dosPortDiagPresentNS = SDL_GetTicksNS() - dosDiagPresentStartNS;
+ 
+         // we've handled any blow up change
+         blowUpChanged = false;
+@@ -1255,18 +1142,6 @@ char playGame() {
+     int frameCount = 0;
+     unsigned long startTime = time( NULL );
+ 
+-#ifdef __DJGPP__
+-    dosPortDiagReset();
+-    {
+-        FILE *f = fopen( "STAGEDBG.LOG", "a" );
+-        if( f != NULL ) {
+-            fprintf( f, "[stage-window life-start window_frames=%d]\n",
+-                     DOS_PORT_DIAG_WINDOW_FRAMES );
+-            fclose( f );
+-            }
+-        }
+-#endif
+-
+ #ifdef __DJGPP__
+     // DOS-PORT: scoped identically to frameCount/startTime just above --
+     // mainFunction()'s while(playGame()) loop can call this function many
+@@ -1364,12 +1239,6 @@ char playGame() {
+ 
+     while( !done ) {
+ 
+-#ifdef __DJGPP__
+-        const Uint64 dosDiagLoopTopNS = SDL_GetTicksNS();
+-        Uint64 dosDiagPacerEntryNS = dosDiagLoopTopNS;
+-        dosPortDiagBlowupNS = 0;
+-        dosPortDiagPresentNS = 0;
+-#endif
+ 
+         if( getKeyDown( SDL_SCANCODE_S ) ) {
+             stepDX = false;
+@@ -1557,11 +1426,6 @@ char playGame() {
+             }
+ 
+         drawScore( gameImage, width, height, score );
+-
+-#ifdef __DJGPP__
+-        dosPortDiagAccum( &dosPortDiag.renderNS, &dosPortDiag.renderMaxNS,
+-                          SDL_GetTicksNS() - dosDiagLoopTopNS );
+-#endif
+         
+ 
+         if( isPlayerDead() ) {
+@@ -1746,7 +1610,7 @@ char playGame() {
+                         }
+                     }
+ 
+-                if( !dosPortDiagPump() ) {
++                if( !SDL_DOSAudioPump() ) {
+                     break;
+                     }
+                 pumpIters ++;
+@@ -1754,7 +1618,7 @@ char playGame() {
+ #else
+             while( pumpIters < pumpMaxIters &&
+                    SDL_DOSAudioRingFillMs() < pumpClampedTargetMs &&
+-                   dosPortDiagPump() ) {
++                   SDL_DOSAudioPump() ) {
+                 pumpIters ++;
+                 }
+ #endif
+@@ -1853,22 +1717,6 @@ char playGame() {
+             // measurement and resync rather than trust it.
+             const Sint64 remainingNS = (Sint64)dosNextFrameDeadlineNS - (Sint64)nowNS;
+ 
+-            dosDiagPacerEntryNS = nowNS;
+-            dosPortDiagAccum( &dosPortDiag.workNS, &dosPortDiag.workMaxNS,
+-                              nowNS - dosDiagLoopTopNS );
+-            dosPortDiagAccum( &dosPortDiag.blowupNS, &dosPortDiag.blowupMaxNS,
+-                              dosPortDiagBlowupNS );
+-            dosPortDiagAccum( &dosPortDiag.presentNS,
+-                              &dosPortDiag.presentMaxNS,
+-                              dosPortDiagPresentNS );
+-            dosPortDiag.slackSumNS += remainingNS;
+-            if( remainingNS < dosPortDiag.slackMinNS ) {
+-                dosPortDiag.slackMinNS = remainingNS;
+-                }
+-            if( remainingNS < 0 ) {
+-                dosPortDiag.overBudget ++;
+-                }
+-
+             if( remainingNS > (Sint64)dosFrameTickNS ) {
+                 // Ahead by more than a whole frame: the clock lied (or the
+                 // deadline is stale). Resync; never sleep on a bad reading.
+@@ -2000,7 +1848,6 @@ char playGame() {
+                 // visible speed-up rather than dropped frames. The known
+                 // ~57ms first-flush stall lands here exactly once per run.
+                 dosNextFrameDeadlineNS = nowNS + dosFrameTickNS;
+-                dosPortDiag.resyncs ++;
+                 SDL_Delay( 0 );
+                 }
+             else {
+@@ -2040,9 +1887,6 @@ char playGame() {
+         // a reject bucket, never in the buffer as a 2^64-scale "period".
+         const Uint64 pacedNowNS = SDL_GetTicksNS();
+ 
+-        dosPortDiagAccum( &dosPortDiag.pacerNS, &dosPortDiag.pacerMaxNS,
+-                          pacedNowNS - dosDiagPacerEntryNS );
+-
+         if( dosLastPacedTicksNS != 0 ) {
+             const Sint64 pacedPeriodNS =
+                 (Sint64)pacedNowNS - (Sint64)dosLastPacedTicksNS;
+@@ -2408,30 +2252,9 @@ char playGame() {
+             maxExploreScore = exploreScore;
+             }
+ 
+-#ifdef __DJGPP__
+-        dosPortDiagAccum( &dosPortDiag.tailNS, &dosPortDiag.tailMaxNS,
+-                          SDL_GetTicksNS() - pacedNowNS );
+-        dosPortDiag.frames ++;
+-        if( dosPortDiag.frames >= DOS_PORT_DIAG_WINDOW_FRAMES ) {
+-            dosPortDiag.hits = dosPortDiagSampleHits;
+-            dosPortDiag.misses = dosPortDiagSampleMisses;
+-            dosPortDiag.transient = dosPortDiagSampleTransient;
+-            dosPortDiagEmit( "full" );
+-            dosPortDiagReset();
+-            }
+-#endif
+ 
+         }
+ 
+-#ifdef __DJGPP__
+-    // partial last window, so the end of a life is not lost
+-    dosPortDiag.hits = dosPortDiagSampleHits;
+-    dosPortDiag.misses = dosPortDiagSampleMisses;
+-    dosPortDiag.transient = dosPortDiagSampleTransient;
+-    dosPortDiagEmit( "partial" );
+-    dosPortDiagReset();
+-#endif
+-
+     unsigned long netTime = time( NULL ) - startTime;
+     double frameRate = frameCount / (double)netTime;
+     
+-- 
+2.47.3
+
