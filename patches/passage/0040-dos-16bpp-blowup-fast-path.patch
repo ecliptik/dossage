@@ -1,0 +1,108 @@
+From a455e4f681062e2c5c9c2ca674f8658fd89c93b6 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 3 Sep 2026 19:31:55 -0700
+Subject: [PATCH 40/40] dos: 16bpp blowup path without a library call per pixel
+
+blowupOntoScreenNative() (patch 0018) packed every source pixel through
+SDL_MapSurfaceRGB() -- a function call that re-derives the format each
+time -- and spread it across its inBlowFactor-wide box with a two-byte
+memcpy() per destination pixel: 1600 calls and 4800 tiny memcpys per
+frame for a 100x16 image. Measured on the 486DX2-50 + Mach64 rig (patch
+0037's STAGEDBG.LOG): 11.9 ms per frame, constant to 0.05 ms across
+every window, for a 300x48 output. That is the second-largest fixed cost
+in the frame after the world render, and far more than the pixel count
+justifies.
+
+For a 2-bytes-per-pixel, non-indexed, non-10-bit surface this reads the
+per-channel bit counts and shifts once from the surface's
+SDL_PixelFormatDetails and packs inline with the same arithmetic
+SDL_MapRGB uses for that case -- (c >> (8 - bits)) << shift per channel,
+OR'd with Amask (SDL_pixels.c) -- writing Uint16s straight into the row
+buffer, then memcpys the row inBlowFactor times as before. Output is
+identical by construction. The generic path is untouched and still
+serves 24bpp and 32bpp.
+
+Verified: DOSBox-X title-screen captures (320x240 16bpp, the same path
+the rig negotiates) from the build before this patch and the build with
+it differ in zero pixels (ImageMagick compare, AE metric, on a rendered
+title with 13 distinct colors), and three full DOSBox-X lives on the
+patched build ran clean (14.97-15.02 fps, fps_p95 14.98-14.99).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017TKEXpxndNddTzMQkSdtBX
+---
+ gameSource/blowUp.cpp | 58 +++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 58 insertions(+)
+
+diff --git a/gameSource/blowUp.cpp b/gameSource/blowUp.cpp
+index 7564e7e..9c93ead 100644
+--- a/gameSource/blowUp.cpp
++++ b/gameSource/blowUp.cpp
+@@ -133,6 +133,64 @@ void blowupOntoScreenNative( Uint32 *inImage, int inWidth, int inHeight,
+         screenRowBufCapacity = neededBytes;
+         }
+ 
++    // DOS-PORT: 16bpp fast path. The generic loop below calls
++    // SDL_MapSurfaceRGB() once per source pixel (1600 calls per frame) and
++    // issues inBlowFactor two-byte memcpy() calls per pixel (4800 per
++    // frame); measured on the 486DX2-50 + Mach64 rig (patch 0037's
++    // STAGEDBG.LOG) that costs 11.9 ms per frame, constant to 0.05 ms,
++    // for a 300x48 output -- far more than the pixel count justifies.
++    // This path does the same packing SDL_MapRGB does for a packed
++    // non-indexed, non-10-bit format -- (c >> (8 - bits)) << shift per
++    // channel, OR'd with Amask (SDL_pixels.c, SDL_MapRGB) -- with the
++    // shifts read once from the surface's SDL_PixelFormatDetails, and
++    // writes Uint16s directly. Output is identical by construction; the
++    // generic path stays for 24/32bpp.
++    if( bytesPerPixel == 2
++        && !SDL_ISPIXELFORMAT_INDEXED( inScreen->format )
++        && !SDL_ISPIXELFORMAT_10BIT( inScreen->format ) ) {
++
++        const int rLoss = 8 - destFormat->Rbits;
++        const int gLoss = 8 - destFormat->Gbits;
++        const int bLoss = 8 - destFormat->Bbits;
++        const int rShift = destFormat->Rshift;
++        const int gShift = destFormat->Gshift;
++        const int bShift = destFormat->Bshift;
++        const Uint16 aMask = (Uint16)destFormat->Amask;
++
++        Uint16 *rowBuf16 = (Uint16 *)screenRowBuf;
++
++        for( int y=0; y<inHeight; y++ ) {
++
++            const Uint32 *srcRow = inImage + y * inWidth;
++            Uint16 *dst = rowBuf16;
++
++            for( int x=0; x<inWidth; x++ ) {
++                const Uint32 pixelValue = srcRow[ x ];
++                const Uint32 r = ( pixelValue >> 16 ) & 0xFF;
++                const Uint32 g = ( pixelValue >> 8 ) & 0xFF;
++                const Uint32 b = pixelValue & 0xFF;
++                const Uint16 packed = (Uint16)(
++                    ( ( r >> rLoss ) << rShift ) |
++                    ( ( g >> gLoss ) << gShift ) |
++                    ( ( b >> bLoss ) << bShift ) |
++                    aMask );
++                for( int i=0; i<inBlowFactor; i++ ) {
++                    *dst++ = packed;
++                    }
++                }
++
++            int destRowStart =
++                ( yOffset + y * inBlowFactor ) * pitch + xOffset * 2;
++            Uint8 *destRow = pixels + destRowStart;
++            for( int i=0; i<inBlowFactor; i++ ) {
++                memcpy( destRow, screenRowBuf, newWidth * 2 );
++                destRow += pitch;
++                }
++            }
++
++        return;
++        }
++
+     for( int y=0; y<inHeight; y++ ) {
+ 
+         for( int x=0; x<inWidth; x++ ) {
+-- 
+2.47.3
+

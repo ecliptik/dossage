@@ -1,0 +1,450 @@
+From 05319b45414747b5d52cda1bf609c39d23b6a9ab Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 3 Sep 2026 19:31:55 -0700
+Subject: [PATCH 39/40] dos: feed the audio device its own format -- the
+ per-chunk conversion  becomes a memcpy
+
+Round 1 of the 486DX2-50 campaign (patch 0038's message has the full
+measurement) found audio conversion taking 43% of every frame on the
+port's minimum-target CPU: 4.2 chunks of 23 ms audio per 98.8 ms frame,
+each chunk ~10 ms of CPU, against 54 ms of actual game work. The low
+tier, which converts 40% as much per chunk, measured 14.79 fps in the
+same round; the high tier about 10 fps. The device on that rig -- a
+PicoGUS in Sound Blaster 2.0 mode, DSP 2.x, 8-bit DMA -- plays U8 mono
+at 22050 Hz whichever tier is built. So the high tier's stereo channel
+and 16-bit depth were being produced by the game's callback (a double
+multiply, two double compares and a float-to-int truncation per sample,
+plus a heap allocation per call) and then thrown away by SDL's per-chunk
+ConvertAudio() (16-bit to float, stereo to mono, float to 8-bit), on
+every one of the ~43 chunks a second.
+
+Two changes, both in startMusic()/audioCallback():
+
+1. The stream opens in the WAV's own format as SDL_LoadWAV reported it,
+   and the device-rate request follows the file, instead of both coming
+   from the compile-time tier constants while songSpec was ignored. That
+   ignored spec is how the committed low-tier SONG.WAV played at 4x speed
+   under every high-tier benchmark build (see the Makefile's stage-time
+   tier guard for the build-side half of that fix); the runtime is now
+   correct for any file.
+
+2. Once the device is open, the song is converted ONCE into the format
+   the device actually negotiated (SDL_GetAudioDeviceFormat), with
+   integer math -- S16 mono/stereo to U8 mono/stereo, and the S16
+   mono/stereo pair either way, at equal rates; anything else is left
+   as loaded and SDL converts per chunk exactly as before -- and
+   SDL_SetAudioStreamFormat() tells the stream its input is now that
+   format. ConvertAudio() then takes its memcpy path on both sides. The
+   original 12 MB high-tier buffer becomes a 3 MB U8 mono one on that
+   hardware; a real SB16 negotiates S16 stereo, which the high-tier song
+   already is, so it takes the same fast path with no conversion at all.
+
+The callback hands SDL the song's own bytes at unity gain (at most two
+puts, at the loop seam), which is the whole of a life except the title
+screen and the death fade; those use integer gain in the song's own
+format through one reused scratch buffer. No per-call allocation.
+
+A witness line ("DOS-PORT audio: song ... -> device ...") goes to stdout
+at startMusic so a run log records which formats met and whether the
+conversion happened.
+
+Verified three ways before any rig time:
+- Host unit test against SDL's own SDL_ConvertAudioSamples() on the real
+  songs: S16 stereo -> U8 mono (the PicoGUS path), -> U8 stereo, -> S16
+  mono, and S16 mono -> U8 mono all agree to within 1 LSB over every
+  sample (max |diff| 1, mean 0.24-0.48; the difference is truncation vs
+  SDL's float rounding); S16 mono -> S16 stereo is exact; the gain path
+  and the unity-gain copy across the loop seam are exact.
+- DOSBox-X, three full natural lives: emulated SB16 (song S16 2ch ->
+  device S16 2ch, no conversion) 14.97 fps; low tier (S16 1ch -> S16
+  2ch) 15.02 fps; emulated Sound Blaster 2.0 -- the rig's path -- song
+  S16 2ch 22050 -> device U8 1ch 22050, 11995200 bytes -> 2998800, 15.02
+  fps, fps_p50 15.00 / fps_p95 14.99. Correctness only, never a
+  performance number.
+- The witness line prints on every launch as designed.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017TKEXpxndNddTzMQkSdtBX
+---
+ gameSource/musicPlayer.cpp | 316 +++++++++++++++++++++++++++++--------
+ 1 file changed, 251 insertions(+), 65 deletions(-)
+
+diff --git a/gameSource/musicPlayer.cpp b/gameSource/musicPlayer.cpp
+index b3da199..ce54693 100644
+--- a/gameSource/musicPlayer.cpp
++++ b/gameSource/musicPlayer.cpp
+@@ -145,6 +145,15 @@ Uint8 *songBuffer = NULL;
+ Uint32 songBufferLen = 0;
+ Uint32 songReadPos = 0;
+ 
++// DOS-PORT: the format songBuffer is actually in, which is also the
++// stream's input format (see startMusic). After a successful device-
++// native conversion this is the device's own spec; otherwise it is the
++// WAV's spec as SDL_LoadWAV reported it. audioCallback reads its frame
++// and sample sizes from here, never from the compile-time tier constants.
++SDL_AudioSpec songFormat;
++int songFrameBytes = 4;
++int songBytesPerSample = 2;
++
+ 
+ // need to synch these with audio thread
+ 
+@@ -365,12 +374,25 @@ void synthesizeAudioCallback( void *inUserData, SDL_AudioStream *inStream,
+ 
+ 
+ 
+-// DOS-PORT: the live playback callback. Copies (with wraparound at the
+-// end of the pre-rendered song) from songBuffer, scaling each S16 sample
+-// by musicLoudness -- the only per-callback cost is one multiply per
+-// sample, versus synthesizeAudioCallback's per-note envelope*wavetable
+-// math above. This is what startMusic() registers with
+-// SDL_OpenAudioDeviceStream.
++// DOS-PORT: the live playback callback. Hands SDL the song's own bytes
++// (with wraparound at the end of the pre-rendered song), in the format
++// startMusic() converted the song to -- the device's native format
++// whenever that conversion was possible -- so that at unity gain the
++// whole per-chunk cost on both sides of the stream is a memcpy.
++//
++// The previous version scaled every sample through a double multiply,
++// two double compares and a float-to-int truncation, and heap-allocated
++// a buffer per call, and then SDL converted the result to the device
++// format per chunk (16-bit to float, stereo to mono, float to 8-bit on
++// the PicoGUS's 8-bit mono path). Measured on the 486DX2-50 + Mach64
++// rig (patch 0037's STAGEDBG.LOG, one natural life): that pipeline
++// cost 43% of every frame -- 3.23 engine pump calls at 10.0 ms each
++// plus one 10.3 ms cooperative audio-thread iterate per frame, 4.2
++// chunks of 23 ms audio produced per 98.8 ms frame -- against 54 ms of
++// actual game work. musicLoudness is exactly 1.0 for the whole of a
++// life except the title screen and the death fade, so the scaled path
++// below runs for a few seconds per life; it uses integer gain in the
++// song's own format through one reused scratch buffer.
+ void audioCallback( void *inUserData, SDL_AudioStream *inStream,
+                     int inAdditionalAmount, int inTotalAmount ) {
+ 
+@@ -378,48 +400,173 @@ void audioCallback( void *inUserData, SDL_AudioStream *inStream,
+         return;
+         }
+ 
+-    // round up to a whole number of S16 frames at this build's tier
+-    // (DOSSAGE_AUDIO_CHANNELS * 2 bytes/frame -- 2 for mono, 4 for
+-    // stereo). Everything else below (songReadPos, numSongSamples,
+-    // wraparound) is already sample-count-based, not frame-pair-based,
+-    // so it needs no further tier-awareness.
+-    const int bytesPerFrame = DOSSAGE_AUDIO_CHANNELS * 2;
+-    int numBytes =
+-        ( ( inAdditionalAmount + bytesPerFrame - 1 ) / bytesPerFrame )
+-        * bytesPerFrame;
++    // round up to a whole number of frames in the song's own format;
++    // songBufferLen is a whole number of frames too (a WAV data chunk,
++    // or a conversion of one), so the loop seam is always frame-aligned.
++    const int frameBytes = songFrameBytes;
++    Uint32 numBytes =
++        (Uint32)( ( ( inAdditionalAmount + frameBytes - 1 ) / frameBytes )
++                  * frameBytes );
++    if( numBytes == 0 ) {
++        return;
++        }
+ 
+-    Uint8 *outputBuffer = new Uint8[ numBytes ];
++    Uint32 pos = songReadPos;
+ 
+-    const Sint16 *songSamples = (const Sint16 *)songBuffer;
+-    Sint16 *outSamples = (Sint16 *)outputBuffer;
+-    int numSongSamples = songBufferLen / 2;
+-    int readSampleIndex = songReadPos / 2;
+-    int numOutSamples = numBytes / 2;
++    if( musicLoudness >= 1.0 ) {
++        // unity gain: no per-sample work at all, at most two puts when
++        // the request straddles the end of the song
++        while( numBytes > 0 ) {
++            Uint32 chunk = songBufferLen - pos;
++            if( chunk > numBytes ) {
++                chunk = numBytes;
++                }
++            SDL_PutAudioStreamData( inStream, songBuffer + pos, (int)chunk );
++            pos += chunk;
++            if( pos >= songBufferLen ) {
++                pos = 0;
++                }
++            numBytes -= chunk;
++            }
++        songReadPos = pos;
++        return;
++        }
++
++    // scaled (title screen, death fade): integer gain, scaled by 256
++    static Uint8 *scratch = NULL;
++    static Uint32 scratchCapacity = 0;
++    if( numBytes > scratchCapacity ) {
++        delete [] scratch;
++        scratch = new Uint8[ numBytes ];
++        scratchCapacity = numBytes;
++        }
+ 
+-    for( int i=0; i<numOutSamples; i++ ) {
+-        double scaled = songSamples[ readSampleIndex ] * musicLoudness;
++    int gain256 = (int)( musicLoudness * 256.0 );
++    if( gain256 < 0 ) {
++        gain256 = 0;
++        }
++    else if( gain256 > 256 ) {
++        gain256 = 256;
++        }
+ 
+-        if( scaled > 32767 ) {
+-            scaled = 32767;
++    if( songBytesPerSample == 1 ) {
++        // unsigned 8-bit, silence at 128
++        for( Uint32 i=0; i<numBytes; i++ ) {
++            int sample = (int)songBuffer[ pos ] - 128;
++            scratch[ i ] = (Uint8)( ( ( sample * gain256 ) >> 8 ) + 128 );
++            pos ++;
++            if( pos >= songBufferLen ) {
++                pos = 0;
++                }
+             }
+-        else if( scaled < -32768 ) {
+-            scaled = -32768;
++        }
++    else {
++        // signed 16-bit
++        const Sint16 *src = (const Sint16 *)songBuffer;
++        Sint16 *dst = (Sint16 *)scratch;
++        const Uint32 numSongSamples = songBufferLen / 2;
++        const Uint32 numOutSamples = numBytes / 2;
++        Uint32 idx = pos / 2;
++        for( Uint32 i=0; i<numOutSamples; i++ ) {
++            dst[ i ] = (Sint16)( ( (int)src[ idx ] * gain256 ) >> 8 );
++            idx ++;
++            if( idx >= numSongSamples ) {
++                idx = 0;
++                }
+             }
++        pos = idx * 2;
++        }
+ 
+-        outSamples[i] = (Sint16)scaled;
++    SDL_PutAudioStreamData( inStream, scratch, (int)numBytes );
++    songReadPos = pos;
++    }
+ 
+-        readSampleIndex++;
+-        if( readSampleIndex == numSongSamples ) {
+-            // loop back to the start of the song
+-            readSampleIndex = 0;
+-            }
++
++
++// DOS-PORT: convert the loaded song, once, into the device's negotiated
++// format, so the stream's input and the device's output are the same
++// spec and SDL's per-chunk ConvertAudio() takes its memcpy path. Integer
++// math only: the float path SDL_ConvertAudioSamples() would use takes
++// tens of seconds for a 3M-sample song on a 486. Handles the pairs this
++// port meets in practice -- S16 mono/stereo to U8 mono/stereo (the
++// PicoGUS / Sound Blaster 2.0 8-bit path), S16 mono to S16 stereo and
++// S16 stereo to S16 mono (a real SB16 or SB Pro) -- and leaves the song
++// untouched for anything else (a different rate, a float device), in
++// which case SDL converts per chunk exactly as before this patch.
++// Returns true when songBuffer now holds the device format.
++static char convertSongToDeviceFormat( const SDL_AudioSpec *inSong,
++                                       const SDL_AudioSpec *inDevice ) {
++    if( inSong->freq != inDevice->freq ) {
++        return false;
++        }
++    if( inSong->format != SDL_AUDIO_S16 ) {
++        return false;
++        }
++    if( inSong->channels < 1 || inSong->channels > 2 ||
++        inDevice->channels < 1 || inDevice->channels > 2 ) {
++        return false;
++        }
++    if( inDevice->format != SDL_AUDIO_U8 &&
++        inDevice->format != SDL_AUDIO_S16 ) {
++        return false;
++        }
++    if( inDevice->format == SDL_AUDIO_S16 &&
++        inDevice->channels == inSong->channels ) {
++        // already identical
++        return true;
+         }
+ 
+-    songReadPos = readSampleIndex * 2;
++    const Sint16 *src = (const Sint16 *)songBuffer;
++    const Uint32 numFrames = songBufferLen / ( 2 * inSong->channels );
++    const int outBytesPerSample = ( inDevice->format == SDL_AUDIO_U8 ) ? 1 : 2;
++    const Uint32 outLen = numFrames * outBytesPerSample * inDevice->channels;
+ 
+-    SDL_PutAudioStreamData( inStream, outputBuffer, numBytes );
++    Uint8 *out = (Uint8 *)SDL_malloc( outLen );
++    if( out == NULL ) {
++        return false;
++        }
+ 
+-    delete [] outputBuffer;
++    Uint8 *out8 = out;
++    Sint16 *out16 = (Sint16 *)out;
++
++    for( Uint32 f=0; f<numFrames; f++ ) {
++        int left, right;
++        if( inSong->channels == 2 ) {
++            left = src[ 2 * f ];
++            right = src[ 2 * f + 1 ];
++            }
++        else {
++            left = src[ f ];
++            right = left;
++            }
++
++        if( inDevice->channels == 1 ) {
++            // downmix: plain average, no headroom loss for a 16-bit sum
++            const int mono = ( left + right ) >> 1;
++            if( outBytesPerSample == 1 ) {
++                out8[ f ] = (Uint8)( ( mono >> 8 ) + 128 );
++                }
++            else {
++                out16[ f ] = (Sint16)mono;
++                }
++            }
++        else {
++            if( outBytesPerSample == 1 ) {
++                out8[ 2 * f ] = (Uint8)( ( left >> 8 ) + 128 );
++                out8[ 2 * f + 1 ] = (Uint8)( ( right >> 8 ) + 128 );
++                }
++            else {
++                out16[ 2 * f ] = (Sint16)left;
++                out16[ 2 * f + 1 ] = (Sint16)right;
++                }
++            }
++        }
++
++    SDL_free( songBuffer );
++    songBuffer = out;
++    songBufferLen = outLen;
++    songReadPos = 0;
++    return true;
+     }
+ 
+ 
+@@ -712,36 +859,38 @@ void startMusic( const char *inTGAFileName ) {
+         return;
+         }
+ 
+-    SDL_AudioSpec audioFormat;
+-
+-    /* Set 16-bit audio at this build's tier (sampleRate/channels --
+-       see DOSSAGE_SAMPLE_RATE/DOSSAGE_AUDIO_CHANNELS above). DOS-PORT:
+-       the low tier renders SONG.WAV mono (see tools/render-music/
+-       render_music.cpp's downmix step) specifically to cut the audio-
+-       pump loop's per-chunk byte count -- real-hardware measurement
+-       found that loop a real, if secondary, per-frame cost, and mono
+-       is a deliberate fidelity tradeoff (Passage's music has genuine
+-       independent per-note left/right loudness, collapsed at that
+-       tier), not a bug. Must match audioCallback's own frame-size
+-       calculation below and the WAV file's actual channel count
+-       exactly, or SDL will misinterpret consecutive samples as the
+-       wrong number of channels (audible as wrong-speed, wrong-pitch
+-       playback, not just a fidelity loss) -- this is why both this
+-       file and the render tool read the same DOSSAGE_AUDIO_CHANNELS
+-       define from the same Makefile variable, rather than each
+-       hardcoding a channel count that could drift out of sync. */
+-    audioFormat.freq = sampleRate;
+-    audioFormat.format = SDL_AUDIO_S16;
+-    audioFormat.channels = DOSSAGE_AUDIO_CHANNELS;
++    // DOS-PORT: open the stream in the WAV's OWN format, as SDL_LoadWAV
++    // reported it, not in the compile-time tier constants. Patches
++    // 0022-0026 passed DOSSAGE_SAMPLE_RATE/DOSSAGE_AUDIO_CHANNELS here and
++    // ignored songSpec; with the committed SONG.WAV being the low-tier
++    // render, a default high-tier build shipped a 11025Hz mono file under
++    // a 22050Hz stereo stream and the music played at 4x speed, two
++    // octaves up -- on every f1f867ccadad benchmark run, undetected for a
++    // day, because the file loads fine and AUDIO_PRESENT checks pass. The
++    // Makefile's stage-time tier guard catches a mismatch at build time;
++    // this makes the runtime correct regardless. The tier constants still
++    // drive tools/render-music (what gets rendered), and the device-rate
++    // request below now follows the file too.
++    //
++    // Then, once the device is open, convert the song ONCE into whatever
++    // format the device actually negotiated and tell the stream its input
++    // is now that format, so SDL's per-chunk conversion collapses to a
++    // memcpy. On this port's reference hardware (PicoGUS in Sound Blaster
++    // 2.0 mode: U8 mono, 8-bit DMA) that removes the 16-bit-to-float,
++    // stereo-to-mono, float-to-8-bit passes SDL otherwise runs on every
++    // 512-frame chunk -- 43% of every frame on a 486DX2-50 (patch 0038's
++    // message has the measurement). A real SB16 negotiates S16 stereo and
++    // the high-tier song already matches it: same fast path, no
++    // conversion needed.
++    songFormat = songSpec;
+ 
+ #ifdef __DJGPP__
+-    // DOS-PORT: request the PHYSICAL device open at sampleRate too, not
+-    // just the logical stream -- without this, SDL3's own core floors
+-    // the real device to 44100Hz regardless of what audioFormat.freq
+-    // above asks for, forcing a resample on every pumped chunk. Must be
+-    // called before SDL_OpenAudioDeviceStream (cached, consumed once at
+-    // OpenDevice).
+-    SDL_DOSAudioSetDeviceFrameRate( sampleRate );
++    // DOS-PORT: request the PHYSICAL device open at the song's rate too,
++    // not just the logical stream -- without this, SDL3's own core floors
++    // the real device to 44100Hz regardless of what the stream asks for,
++    // forcing a resample on every pumped chunk. Must be called before
++    // SDL_OpenAudioDeviceStream (cached, consumed once at OpenDevice).
++    SDL_DOSAudioSetDeviceFrameRate( songSpec.freq );
+ #endif
+ 
+     /* DOS-PORT: SDL3 opens a device+callback pair via
+@@ -749,7 +898,7 @@ void startMusic( const char *inTGAFileName ) {
+        fields moved out of SDL_AudioSpec and into this call's own
+        arguments). */
+     audioStream = SDL_OpenAudioDeviceStream( SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
+-                                              &audioFormat,
++                                              &songSpec,
+                                               audioCallback, NULL );
+ 
+     if( audioStream == NULL ) {
+@@ -757,6 +906,43 @@ void startMusic( const char *inTGAFileName ) {
+         return;
+         }
+ 
++    SDL_AudioSpec deviceSpec;
++    int deviceSampleFrames = 0;
++    char deviceNative = false;
++    if( SDL_GetAudioDeviceFormat( SDL_GetAudioStreamDevice( audioStream ),
++                                  &deviceSpec, &deviceSampleFrames ) ) {
++        if( convertSongToDeviceFormat( &songSpec, &deviceSpec ) ) {
++            songFormat = deviceSpec;
++            deviceNative = true;
++            }
++        }
++
++    songBytesPerSample = ( songFormat.format == SDL_AUDIO_U8 ) ? 1 : 2;
++    songFrameBytes = songBytesPerSample * songFormat.channels;
++
++    if( deviceNative ) {
++        // the stream's input is now the device's own format; its output
++        // side is bound to the device and cannot change (and need not).
++        SDL_SetAudioStreamFormat( audioStream, &songFormat, NULL );
++        }
++
++    // Witness line for the run log: which formats met, and whether the
++    // per-chunk conversion is gone. printf so a redirected STDOUT.TXT and a
++    // DOSBox-X capture both see it.
++    printf( "DOS-PORT audio: song %s %dch %dHz -> device %s %dch %dHz "
++            "(%d frames/chunk): %s, stream input %s %dch, %lu bytes\n",
++            ( songSpec.format == SDL_AUDIO_U8 ) ? "U8" : "S16",
++            (int)songSpec.channels, (int)songSpec.freq,
++            ( deviceSpec.format == SDL_AUDIO_U8 ) ? "U8" :
++            ( deviceSpec.format == SDL_AUDIO_S16 ) ? "S16" : "other",
++            (int)deviceSpec.channels, (int)deviceSpec.freq,
++            deviceSampleFrames,
++            deviceNative ? "converted once to device format"
++                         : "left as loaded, SDL converts per chunk",
++            ( songFormat.format == SDL_AUDIO_U8 ) ? "U8" : "S16",
++            (int)songFormat.channels,
++            (unsigned long)songBufferLen );
++
+     // DOS-PORT: SDL_OpenAudioDeviceStream opens the device paused.
+     SDL_ResumeAudioDevice( SDL_GetAudioStreamDevice( audioStream ) );
+     }
+-- 
+2.47.3
+
