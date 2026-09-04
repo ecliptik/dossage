@@ -1,0 +1,92 @@
+From 8c82c5a1672970e62ef0dd071a60b5afd262dd89 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 3 Sep 2026 22:22:29 -0700
+Subject: [PATCH] dos: disable the shared backend's silence-detect throttle for
+ Passage's  quiet passages
+
+Round 2 on the 486DX2-50 + Mach64 rig, with patches 0039/0040 in, put
+the port back to pacer-bound in every ordinary window of a life: work
+38-41 ms, real sleep of 19-21 ms, 3-4 frames over budget per 300, no
+resyncs. Three windows per life were the exception -- the first ~20 s
+after each of the song's loop points (the song is 136 s long) -- and
+they were the whole remaining gap between a 304 s life and the 298.3 s
+a 15 fps life takes: engine pump 8.8-9.8 ms per frame from ~260 calls
+per 300 frames, a frame summing to 70-75 ms, 67-77 frames over budget
+and 4-7 debt-clamp resyncs in each such window.
+
+The mechanism is the Sound Blaster backend's Shape A post-mix silence
+detect (doskutsu SDL/0054): when a mixed chunk is all-silence it skips
+the ring write and sleeps 10 ms as a throttle. Right for a game whose
+audio is effects over silence; wrong for Passage, where the quiet start
+of the song is content. With nothing written the ring fill never rises,
+so the engine's ring-depth pump (playGame's pump loop, target 150 ms)
+calls again every frame, and every one of those calls -- plus the
+cooperative audio-thread iterate that the pacer's SDL_Delay(0) yield
+runs when a frame is behind -- pays the 10 ms sleep. The same
+three-window pump burst was visible in this port's DOSBox-X smokes
+before Round 1 (windows 0, 6 and 13, ~250 calls each) and was read at
+the time only as "something at the song loop".
+
+The backend has a killswitch (SDL/0056): its hint read is
+SDL_GetHint("SDL_HINT_DOS_SILENCE_DETECT"), strict "0" disables,
+resolved once at OpenDevice. This sets it with override priority next
+to the port's other DOS hints, before SDL_Init. No shared-layer change.
+Silent chunks are then written to the ring like any other; the backend's
+"always fill" path is its own older default.
+
+Verified (DOSBox-X, correctness only): a full natural life on the
+shipping build ran clean (14.97 fps, fps_p50 15.00 / fps_p95 14.98), and
+the diagnostic twin's STAGEDBG.LOG shows pump_avg 0.00 and zero pump
+calls in every one of its 15 windows, including windows 0, 6 and 13,
+where the same diagnostic without this hint recorded 8.3-8.7 ms per
+frame from ~250 calls per window; its CMOS RTC witness read 299 s
+against 299 s of engine time. Real-hardware confirmation is the
+Round 3 cells.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017TKEXpxndNddTzMQkSdtBX
+---
+ gameSource/game.cpp | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index ed59d03..eb3835a 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -732,6 +732,33 @@ int mainFunction( int inArgCount, char **inArgs ) {
+                               SDL_HINT_OVERRIDE );
+     SDL_SetHintWithPriority( SDL_HINT_DOS_MAX_BPP, "16",
+                               SDL_HINT_OVERRIDE );
++
++    // DOS-PORT: turn off the shared Sound Blaster backend's post-mix
++    // silence-detect throttle (doskutsu's SDL/0054 "Shape A", killswitch
++    // SDL/0056). When a mixed chunk is all-silence that path skips the
++    // ring write and sleeps 10 ms. That is the right trade for a game
++    // whose audio is sound effects over silence; for Passage it is the
++    // opposite: the song has genuinely quiet passages (the first ~20 s
++    // after each 136 s loop), and silence there is content that must
++    // reach the ring like any other chunk. With the write skipped the
++    // ring fill never rises, so the engine's own ring-depth pump (see
++    // playGame) calls again every frame and every call -- and every
++    // cooperative audio-thread iterate inside the pacer's yield -- pays
++    // that 10 ms. Measured on the 486DX2-50 + Mach64 rig (Round 2, patch
++    // 0037's diagnostic re-applied on top of 0040): in the three quiet
++    // windows of a life the pump costs 8.8-9.8 ms per frame from ~260
++    // calls per 300 frames, the frame sums to 70-75 ms against a 66.67 ms
++    // budget, 67-77 of 300 frames run over and the debt clamp resyncs 4-7
++    // times, while every other window sits at 60 ms with 15-20 ms of
++    // slack and no resyncs. Those three windows are the whole remaining
++    // gap between a 304 s life and the 298.3 s a 15 fps life takes. The
++    // same three-window pump burst reproduces under DOSBox-X. Set with
++    // override priority so a stray environment variable cannot re-enable
++    // it; the backend reads the value once at OpenDevice. Name is the
++    // backend's own string (it is read via SDL_GetHint, not a public
++    // SDL_HINT_* macro).
++    SDL_SetHintWithPriority( "SDL_HINT_DOS_SILENCE_DETECT", "0",
++                              SDL_HINT_OVERRIDE );
+ #endif
+ 
+     // DOS-PORT: SDL3 removed SDL_INIT_NOPARACHUTE (no signal-handler
+-- 
+2.47.3
+
