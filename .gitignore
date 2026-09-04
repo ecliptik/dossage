@@ -49,9 +49,12 @@ venv/
 .idea/
 .vscode/
 
-# Claude Code local session state (agents, skills, settings) -- same
-# convention as doskutsu: nothing under .claude/ is tracked.
-.claude/
+# Claude Code local session state (agents, skill symlinks, settings.local.json)
+# -- same convention as doskutsu: not tracked, EXCEPT settings.json, which
+# enables the sdl-dos-ports hub's sdldos plugin (/sdldos:review, ...) for
+# every clone. `.claude/*` rather than `.claude/` so the negation can work.
+.claude/*
+!.claude/settings.json
 
 # Scratch / draft area
 /.tmp/

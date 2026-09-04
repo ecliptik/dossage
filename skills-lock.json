@@ -1,55 +1,6 @@
 {
   "version": 1,
   "skills": {
-    "benchmark": {
-      "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
-      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
-      "sourceType": "git",
-      "skillPath": "shared/skills/benchmark/SKILL.md",
-      "computedHash": "9658c1ad119349172903c8fb34550400a1c73d9010e22f9c2a07ce77ed05a6b5"
-    },
-    "dos-emulator-workflow": {
-      "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
-      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
-      "sourceType": "git",
-      "skillPath": "shared/skills/dos-emulator-workflow/SKILL.md",
-      "computedHash": "8ae396b25945e24207266cc9aff57c3d0a7dc202195711b71589856cdcb40e13"
-    },
-    "dos-hardware-validation": {
-      "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
-      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
-      "sourceType": "git",
-      "skillPath": "shared/skills/dos-hardware-validation/SKILL.md",
-      "computedHash": "3d293265ae1dcb4e57d736b6b0b056f6b3b851b0cc88858893d12f1033290843"
-    },
-    "dos-realhw-verification": {
-      "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
-      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
-      "sourceType": "git",
-      "skillPath": "shared/skills/dos-realhw-verification/SKILL.md",
-      "computedHash": "d926db45fb93c4542bccd3f45c335f7765c9d653191344a84eeabdcadefae3aa"
-    },
-    "dos-rig-operations": {
-      "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
-      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
-      "sourceType": "git",
-      "skillPath": "shared/skills/dos-rig-operations/SKILL.md",
-      "computedHash": "21b0e889678aa2dac5bdabcd1a09f45940a302794390506663703960b5efd95d"
-    },
-    "port": {
-      "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
-      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
-      "sourceType": "git",
-      "skillPath": ".claude/skills/port/SKILL.md",
-      "computedHash": "dc8d148c956f1709c2e4dffb496d47226266368675cf63e4d5dfa89e0d084afb"
-    },
-    "review": {
-      "source": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
-      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git",
-      "sourceType": "git",
-      "skillPath": "shared/skills/review/SKILL.md",
-      "computedHash": "9de67b4ed8d62b1ba3cefda4e6161cc14fb412562ab4e48e4825265e227b90a4"
-    },
     "vcctrl-camera": {
       "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
       "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
