@@ -32,7 +32,12 @@ Read `.sdl-dos-ports/shared/tests/probes/README.md` before starting.
 - Single `.c` file, roughly 150-300 lines.
 - Timing via PIT (port 0x40, mode-2 channel-0 reads) for ms-resolution, or
   RDTSC (`__asm__ volatile ("rdtsc" : "=A"(t))` on DJGPP) for
-  cycle-resolution -- gives a 64-bit cycle counter on P54C+.
+  cycle-resolution -- gives a 64-bit cycle counter on P54C+. Gate RDTSC on
+  `CPUID`'s TSC bit and give it a killswitch: from a real-mode (V86)
+  program it hard-hangs the g2k Pentium OverDrive under EMM386 (power
+  cycle to recover); DJGPP protected-mode probes have not been affected on
+  that rig, but read `docs/timing.md`'s RDTSC section before reaching for
+  it, and never call it from a real-mode helper.
 - Output: a single `<NAME>.LOG` file in the working directory. Report
   min/median/mean/p95/max, not just a single mean -- tail latency often
   matters more than the average.
@@ -64,6 +69,13 @@ Read `.sdl-dos-ports/shared/tests/probes/README.md` before starting.
 
 ## Hard constraints
 
+  **Do not "check" the value with a bare `stubedit FILE minstack`:** a
+  key with no `=value` is treated as setting it to empty, and stubedit
+  silently writes 0 -- the binary then exits at load with no message at
+  all, on DOSBox-X and real hardware alike (hit on 2026-09-03 while
+  staging a probe for the vcctrl rig). Read the field back instead:
+  `xxd -s 0x214 -l 4 -e FILE.EXE` prints the minstack dword of the
+  go32stub header (expect `00200000` for 2048k).
 - **No SDL, no game engine, no C++.** Pure C + DJGPP libc + DPMI.
 - **8.3 filenames everywhere.**
 - **Frame predictions as hypotheses.** The probe measures; don't assert a

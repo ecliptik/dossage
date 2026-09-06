@@ -4,8 +4,9 @@ description: >
   Bootstrapping a new DOS port from a ports.yaml BACKLOG candidate all the
   way to "a real, wired-up repo with a porting agent ready to start the
   compile slice" -- upstream/license verification, scripts/new-port.sh's
-  mechanical scaffold, self-contained skill install (both this hub's and
-  vcctrl's skills via npx skills) shared/agents charter
+  mechanical scaffold, skill wiring (this hub's skills via the sdldos
+  plugin enabled in .claude/settings.json, vcctrl's via npx skills),
+  shared/agents charter
   instantiation, vendor/sources.manifest pins, the ports.yaml claim commit,
   and a concrete handoff message to the port repo's own agent. Use this
   whenever claiming a new port candidate, starting a new port repo, or
@@ -88,12 +89,14 @@ git history, reachable immediately after a plain `git clone`) for
 everything in `shared/` *except* patches, which the new repo now owns as
 its own standalone copy (see `docs/patch-conventions.md`'s "Patches are
 vendored per-port, not shared" -- no ongoing sync back to this hub's
-series once scaffolded). This step already installs every skill from both this
-hub and vcctrl into the new repo's `.claude/skills/` via
-`npx skills add <repo> --full-depth --all -a claude-code` (self-contained
--- no subtree/submodule symlink needed for skills, only for the actual
-platform code), falling back to the older hub-only symlink method if
-`npx`/network isn't available. Don't redo either by hand.
+series once scaffolded). This step also writes the new repo's `.claude/settings.json`, which
+registers this hub as a plugin marketplace and enables the `sdldos`
+plugin (so `/sdldos:review`, `/sdldos:benchmark`, ... are offered to
+anyone who opens and trusts the repo -- no per-repo copy of any
+`SKILL.md`), plus the `.gitignore` rule that lets that one file be
+tracked, and installs vcctrl's skills flat via
+`npx skills add <repo> --full-depth --all -a claude-code`. Don't redo
+either by hand.
 
 Skill *knowledge* is auto-installed; real-hardware *access* is not, and
 that's deliberate, not a gap. If `VCCTRL_MCP_URL` is set in the
@@ -132,10 +135,11 @@ haven't yet), not guessed at a conventional structure. Leave
 only gets stood up once the port is actually doing profiling-driven
 optimization, which is nowhere close to true yet.
 
-These charters and the `.claude/skills/`/`.agents/skills/` skill install
-output are gitignored in every
-port repo (matching doskutsu's own convention) -- don't fight that by
-trying to force-add them.
+These charters and the `.claude/skills/` symlinks are gitignored in
+every port repo (matching doskutsu's own convention) -- don't fight that
+by trying to force-add them. The one tracked file under `.claude/` is
+`settings.json`, the plugin enablement; whether vcctrl's npx-installed
+`.agents/skills/` copies are tracked is the port's own call.
 
 ## Step 4: Pin `vendor/sources.manifest`
 
@@ -184,8 +188,8 @@ Check `ListAgents` for a session already running in the new repo (the
 operator may have started one before invoking this skill, per this
 skill's own description). If one exists, send it a concrete brief via
 `SendMessage` -- not "go start porting," but the actual state: what's
-scaffolded, where its own `.claude/agents/` charters and `.claude/skills/`
-live, what Step 5's PLAN.md says, and that its first task is
+scaffolded, where its own `.claude/agents/` charters live and that this hub's
+skills arrive as `/sdldos:*` through the plugin, what Step 5's PLAN.md says, and that its first task is
 `PORTING.md`'s step 3 (research) feeding into step 4's compile slice. If
 no agent is running yet, tell the operator what to start (a session with
 its working directory set to the new repo) and give them the same brief

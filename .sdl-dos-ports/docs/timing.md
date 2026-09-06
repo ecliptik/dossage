@@ -50,6 +50,32 @@ type, instead of the small positive number expected). Clamp any
 a single wildly-anomalous timing sample as a suspect measurement to
 discard, not as a finding to explain.
 
+**`gettimeofday()` has no sub-second resolution of its own, so a period
+measured with it collapses onto a few discrete values.** DJGPP's
+`gettimeofday()` fills `tv_usec` from DOS's own clock (INT 21h AH=2Ch,
+hour:minute:second:hundredths -- the `AH=0x2C` call is right there in
+`gettimeo.o` inside the toolchain's `libc.a`), and DJGPP's libc reference
+says so outright: "precise to less than 1/20 of a second only ... the
+underlying DOS function has 1/20 second granularity, as it is calculated
+from the 55 ms timer tick count". DOS advances its hundredths by an uneven
+mix of steps per 18.2065 Hz tick (100 does not divide by 18.2065), so a
+genuinely steady period measured this way comes out as whichever whole
+number of ticks elapsed during that frame's phase against the tick
+boundary, rounded to a hundredth. dossage/Passage saw exactly this
+(`docs/PACER-TIMING-INVESTIGATION.md` there, resolved 2026-09-03): a
+deadline pacer converging on a true ~66.67 ms period against
+`SDL_GetTicksNS()`, measured per frame with `gettimeofday()`, produced
+`fps_p50`/`fps_p95` of exactly 16.67/9.09 on every CPU and card, and every
+one of 256 raw samples checked was exactly 50, 60, 100, 110 or 330 ms --
+reproduced in complete isolation by a standalone probe with no SDL,
+audio, or rendering, so it is hardware-independent by construction.
+Never use `gettimeofday()`, or anything built on it such as an engine's
+own portable "current time" wrapper, for sub-second frame-timing
+instrumentation on this platform; use `SDL_GetTicksNS()` / `uclock()`,
+the same clock family the pacer runs on. This is a second, independently
+confirmed root cause behind the "single clock family end-to-end" rule in
+the pacer-patterns section below.
+
 **A busy-wait fix can starve the BIOS timer interrupt, and the fps report
 will lie about it in the flattering direction.** dossage/Passage's
 frame-limiter investigation (see `docs/optimization.md`) tried replacing a
@@ -149,6 +175,108 @@ future port's startup feels janky specifically in its first second or two
 on 486-class hardware, this is a known, already-characterized cause to
 check before assuming a new bug.
 
+## RDTSC from real-mode code hangs the g2k Pentium OverDrive under EMM386 (DJGPP protected mode: not affected so far)
+
+**Finding (2026-09-03, vcctrl rig).** With the Pentium OverDrive 83
+installed, the first `RDTSC` executed by a *real-mode* DOS program running
+as a V86 task under MS-DOS 6.22 `EMM386 NOEMS` never returns. Interrupts
+keep being serviced (keyboard LEDs still respond) but there is no forward
+progress; Enter, Ctrl-Break and Ctrl-Alt-Del do nothing, and only a power
+cycle recovers. Reproduced twice in `dinspect` (the sibling 16-bit Open
+Watcom hardware-inventory tool, via a step-by-step trace build that left
+the line printed immediately before `RDTSC` as the last thing on screen)
+and independently by HWiNFO for DOS the same day. `CPUID` under the same
+EMM386 is fine. Every boot profile on that rig loads EMM386 in `[COMMON]`,
+so there is no EMM386-free profile to fall back to. The mechanism has not
+been identified (EMM386 reflecting an opcode it cannot emulate, or
+something specific to the OverDrive); do not repeat a guess as if it were
+known.
+
+**Why every 486-class result was silent about this.** The OverDrive is the
+only CPU in the rig's matrix with a time-stamp counter at all. Code that
+gates `RDTSC` on `CPUID`'s TSC bit passes every 486DX2 / Am5x86 test by
+never executing the instruction, then wedges on the first Pentium-class
+tier.
+
+**What it does and does not cover.**
+
+- *Real-mode / V86 code* (a 16-bit Open Watcom or Turbo C utility, a setup
+  tool, anything launched from a BAT that is not a DPMI program): treat
+  `RDTSC` as unsafe under a V86 monitor. dinspect's fix is the right one
+  there: read CR0 via `SMSW` (unprivileged, never traps); if PE is set
+  while a "real-mode" program is running, a V86 monitor (EMM386, QEMM, a
+  Windows DOS box) is underneath -- skip `RDTSC` and use a PIT-timed loop.
+- *DJGPP protected-mode code* (every port built on this hub, every DJGPP
+  probe): the same rig, CPU and EMM386 line has been executing `RDTSC`
+  from a CWSDPMI DPMI client without incident. doskutsu's 2026-08-13
+  round-2 QA matrix on the OverDrive (`qa-results/2026-08-13-r2-POD83/
+  *SDL.LOG`; UNIVBE boot profile with `EMM386 NOEMS`; cpu-witness family 5
+  model 3 stepping 2) logs `audio IRQ timer: RDTSC (Pentium-class
+  detected, 83 cycles/us ~= 83 MHz)` on every cell: SDL/0039 ran a 10 ms
+  `RDTSC` calibration spin at device open and then executed `RDTSC` inside
+  every Sound Blaster IRQ for whole sessions. A ring-3 DPMI client under
+  CWSDPMI (hosted via VCPI, with its own GDT/IDT) is a different execution
+  context from a V86 task, and it is the context a port actually runs in.
+  Treat this as "observed not to hang", not "proven safe".
+
+**What a DJGPP program can and cannot detect.** The `SMSW`/PE test is
+meaningless from a DPMI client: PE is always set in protected mode, so it
+would disable `RDTSC` everywhere, DOSBox-X and EMM386-free machines
+included. DPMI function 0400h's flags bit 1 ("host returns to real mode,
+not V86, for reflected interrupts") is no better: CWSDPMI hardcodes the
+flags word to 1 or 5 (`exphdlr.c`, `case 0x0400: tss_ebx =
+dalloc_max_size() ? 5 : 1`), so it reports V86 whether or not a monitor is
+loaded. The only real signal is VCPI presence (INT 67h AX=DE00h), which
+the shared layer deliberately does not consult because the evidence above
+says its context is fine.
+
+**What the shared layer does.** `shared/patches/sdl3-dos/0039` keeps its
+default (RDTSC when `CPUID` reports a TSC, 8253 PIT counter 0 otherwise).
+`0138` adds a runtime killswitch, `SDL_HINT_DOS_AUDIO_TIMER_RDTSC=0`
+(strict `0`), that selects the PIT path unconditionally and logs
+`audio IRQ timer: 8253 PIT counter 0 (RDTSC disabled via
+SDL_HINT_DOS_AUDIO_TIMER_RDTSC=0; ...)`. If a run on new Pentium-class
+hardware, or under a different memory manager, stops at audio device open
+with the symptoms above, set that env var before a rebuild is even
+considered. The PIT path costs only telemetry resolution (~838 ns per
+tick against ~12 ns) and is the path every 486-class result on this hub
+was measured with.
+
+**Real-hardware A/B of the killswitch: pending.** The OverDrive was
+swapped out of the rig for a 486DX2-50 campaign on 2026-09-03 before the
+`0138` build could be run on it, and a 486 predates `CPUID`, so nothing
+RDTSC-related can be tested until a Pentium-class CPU is back in the
+socket. The witness is `shared/tests/probes/audtimer.c` + `audtimer.bat`
+(SDL3-linked; step 1 forces the killswitch and never executes `RDTSC`,
+step 2 is the production default). Expected on the OverDrive: step 1
+logs `8253 PIT counter 0 (RDTSC disabled via
+SDL_HINT_DOS_AUDIO_TIMER_RDTSC=0; ...)`, step 2 logs `RDTSC
+(Pentium-class detected, 83 cycles/us ~= 83 MHz)`. Whoever runs it next:
+record the result here and in `HARDWARE.md`'s row.
+
+**For port-side and probe code.** Prefer `uclock()` / the PIT for timing.
+If a port or probe wants `RDTSC` from DJGPP, gate it on `CPUID` (TSC bit),
+give it a killswitch, and put the first `RDTSC` somewhere a wedge would be
+recognized immediately, not inside an IRQ handler. Never execute it from
+any real-mode helper without the `SMSW` check.
+
+## Open (dossage, 2026-09-05): a fixed-length run can land one second over an integer-second boundary on some CPU/card pairings and not others
+
+Unconfirmed and not chased -- recorded so the next port doing precision
+fps work recognizes the shape. Across dossage/Passage's full 3-card x
+4-CPU matrix on one build, a natural ~298 s life measured as 299 s on
+some pairings (Cirrus at both 486DX2 tiers, Mach64 on Am5x86, and Mach64
+on 486DX2-50 on two of three repeat lives) and 298 s on the rest, with
+S3 ViRGE never showing it at any tier. Neither banked-vs-LFB, framebuffer
+bytes per frame, nor CPU tier explains the table on its own. The working
+theory in `docs/benchmarks/mach64-215ct-486dx2-66-2026-09-05.md` there:
+overall per-frame margin sets how close a pairing sits to the rounding
+boundary, and ordinary run-to-run jitter (plausibly the same
+DOS-tick-phase quantization as the `gettimeofday()` finding above)
+decides which side an individual life lands on. Separating those two
+needs repeat lives per pairing or per-frame-cost instrumentation;
+nothing in that table threatened a KPI, so it stayed open.
+
 ## Reference pacer patterns from doskutsu (deadline-based, not delta-based)
 
 dossage/Passage's frame-rate investigation (see `docs/optimization.md`)
@@ -207,8 +335,9 @@ engine this hub has real data on.
 **The precedent that matters most across both mechanisms**: doskutsu
 paces and measures using SDL's own timer API throughout
 (`SDL_GetTicks()`/`SDL_GetTicksNS()`) -- never an engine-private clock
-(e.g. a separate `gettimeofday()` call) running in parallel with whatever
-clock the delay primitive itself uses. This is the same "single clock
+(e.g. a separate `gettimeofday()` call -- which on DJGPP has no
+sub-second resolution of its own anyway, see "Your clock can lie")
+running in parallel with whatever clock the delay primitive itself uses. This is the same "single clock
 family end-to-end" principle a same-clock instrumentation pass can prove
 out before trusting a cross-clock measurement (see the `DOS_Yield()`/
 frame-cycle-time diagnostics above) -- and it applies to the *pacing*

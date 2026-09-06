@@ -105,25 +105,62 @@ cp "$HUB_DIR"/shared/patches/sdl3-mixer/*.patch patches/SDL_mixer/
 # vcctrl lives somewhere other than the default forgejo location.
 VCCTRL_REMOTE="${VCCTRL_REMOTE:-https://forgejo.ecliptik.com/ecliptik/vcctrl.git}"
 
-echo "==> Installing skills (sdl-dos-ports + vcctrl) via npx skills"
-NPX_SKILLS_OK=1
-if ! command -v npx >/dev/null 2>&1; then
-  echo "    npx not found -- skipping, falling back to the hub-only symlink method." >&2
-  NPX_SKILLS_OK=0
-elif ! npx --yes skills@latest add "$HUB_REMOTE" --full-depth --all -a claude-code -y >/dev/null 2>&1; then
-  echo "    npx skills add failed for sdl-dos-ports (offline?) -- falling back to the hub-only symlink method." >&2
-  NPX_SKILLS_OK=0
-elif ! npx --yes skills@latest add "$VCCTRL_REMOTE" --full-depth --all -a claude-code -y >/dev/null 2>&1; then
-  echo "    warning: sdl-dos-ports skills installed, but vcctrl skills failed (offline? VCCTRL_REMOTE wrong?)." >&2
-  echo "             Re-run manually: npx skills add $VCCTRL_REMOTE --full-depth --all -a claude-code" >&2
+# HUB_PLUGIN_URL is what the new repo's tracked .claude/settings.json
+# points Claude Code at to fetch this hub as a plugin marketplace. It is
+# deliberately NOT $HUB_REMOTE: that is whatever this checkout's origin
+# is (an ssh:// URL here), which would demand an SSH key on every machine
+# that ever opens the port repo. The public HTTPS URL clones anonymously.
+HUB_PLUGIN_URL="${HUB_PLUGIN_URL:-https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git}"
+
+# Claude Code skills arrive two ways. This hub's own skills (port, review,
+# benchmark, dos-*) are the `sdldos` plugin: the project settings written
+# here register the hub as a plugin marketplace and enable the plugin, so
+# Claude Code offers /sdldos:port, /sdldos:review, ... to anyone who opens
+# and trusts the new repo -- no per-repo copy of any SKILL.md, and
+# `/plugin update sdldos` picks up hub changes. vcctrl's skills are not a
+# plugin, so they still install flat via `npx skills` (real files under
+# .agents/skills/, symlinked into .claude/skills/). See
+# shared/skills/README.md.
+echo "==> Writing .claude/settings.json (enables the sdldos plugin from $HUB_PLUGIN_URL)"
+cat > .claude/settings.json <<EOF
+{
+  "extraKnownMarketplaces": {
+    "sdl-dos-ports": {
+      "source": {
+        "source": "git",
+        "url": "${HUB_PLUGIN_URL}"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "sdldos@sdl-dos-ports": true
+  }
+}
+EOF
+
+# The rest of .claude/ is local session state (agents, skill symlinks,
+# settings.local.json) and stays untracked, per doskutsu's convention;
+# only settings.json travels with the repo so the plugin enablement
+# reaches every clone. git can't re-include a file under an ignored
+# parent directory, hence `.claude/*` rather than `.claude/`.
+if [ ! -f .gitignore ] || ! grep -q '^\.claude' .gitignore; then
+  cat >> .gitignore <<'EOF'
+
+# Claude Code local session state (agents, skill symlinks, settings.local.json)
+# is not tracked -- except settings.json, which enables the sdldos plugin for
+# every clone of this repo. `.claude/*` (not `.claude/`) so the negation works.
+.claude/*
+!.claude/settings.json
+EOF
 fi
 
-if [ "$NPX_SKILLS_OK" -eq 0 ]; then
-  echo "==> Symlinking shared skills into .claude/skills/ (hub only -- no vcctrl skills this way)"
-  for skill_dir in .sdl-dos-ports/shared/skills/*/; do
-    skill_name="$(basename "$skill_dir")"
-    ln -s "../../.sdl-dos-ports/shared/skills/${skill_name}" ".claude/skills/${skill_name}"
-  done
+echo "==> Installing vcctrl skills via npx skills"
+if ! command -v npx >/dev/null 2>&1; then
+  echo "    npx not found -- skipping. Install later from this repo's root:" >&2
+  echo "    npx skills add $VCCTRL_REMOTE --full-depth --all -a claude-code" >&2
+elif ! npx --yes skills@latest add "$VCCTRL_REMOTE" --full-depth --all -a claude-code -y >/dev/null 2>&1; then
+  echo "    warning: vcctrl skills failed to install (offline? VCCTRL_REMOTE wrong?)." >&2
+  echo "             Re-run manually: npx skills add $VCCTRL_REMOTE --full-depth --all -a claude-code" >&2
 fi
 
 # VCCTRL_MCP_URL is intentionally NOT a hardcoded default anywhere in this
@@ -195,11 +232,13 @@ echo "  2. Locate the canonical upstream repo and pin a revision in"
 echo "     vendor/sources.manifest -- never guess."
 echo "  3. Copy .sdl-dos-ports/shared/agents/*.md into .claude/agents/ and"
 echo "     fill in the placeholders (see shared/agents/README.md's table)."
-echo "  4. Set this repo's own git remote and push when ready."
-echo "  5. In the sdl-dos-ports hub repo, update ports.yaml: set"
+echo "  4. Open this repo in Claude Code and trust it: .claude/settings.json"
+echo "     offers the sdldos plugin (/sdldos:review, /sdldos:benchmark, ...)."
+echo "  5. Set this repo's own git remote and push when ready."
+echo "  6. In the sdl-dos-ports hub repo, update ports.yaml: set"
 echo "     dos_status: RESEARCH and port_repo_url for '${NAME}'."
 echo ""
 echo "(Steps 1-3 plus the upstream/license research and the handoff to a"
 echo "porting agent are exactly what the sdl-dos-ports hub's 'port' skill"
-echo "(/port) automates -- run this script directly only if you want just"
-echo "the mechanical scaffold.)"
+echo "(/sdldos:port) automates -- run this script directly only if you want"
+echo "just the mechanical scaffold.)"

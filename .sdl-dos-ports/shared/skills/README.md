@@ -16,37 +16,52 @@ from day to day.
 | `dos-rig-operations/` | Day-to-day rig mechanics independent of a full campaign: input-injection landed-vs-dropped detection, screen-capture evidence discipline, file transfer + packaging/handoff, log collection, power management, and multi-agent coordination (a spawned specialist doesn't inherit rig access; single-coordinator-per-campaign to prevent double-dispatch) | Reusable as-is -- mostly points at vcctrl's own `vcctrl-rig-hazards`/`vcctrl-common-workflows` for mechanics and adds the port-session framing/hazard classes on top |
 | `dos-realhw-verification/` | Knowing a build/fix/diagnosis is actually correct on real hardware, not just apparently correct: two-witness build verification, stale-cache failure shapes, DOSBox-X/86Box tiering, build-host tooling traps, real-hardware-vs-emulator divergence debugging | Reusable as-is -- the epistemics (what a check's failure would look like) and failure-shape catalog are port-agnostic; the worked examples are illustrative, not something to copy literally |
 | `dos-emulator-workflow/` | Local, no-rig-required DOSBox-X development: which of the three `shared/tools/dosbox-*.sh` scripts to reach for, the emulator-only escape hatches already baked into the shipped confs (and why they must never reach real hardware), the "necessary but not sufficient" pattern for a probe that can only partially answer a hardware question locally, and local-timing observation vs. an actual performance claim | Reusable as-is for the tooling/mechanics and the DOSBox-X/hardware boundary; the shipped `.conf` files' own `cycles=`/video/sound calibration is one port's reference-machine numbers, not a universal setting -- re-calibrate for your own port |
-| `review/` | Checking a patch (a port's own vendored `patches/SDL/`, `patches/<engine>/`, or this hub's own `shared/patches/` reference series) against this hub's landing conventions before committing: provenance verification, DJGPP hard constraints, neutral naming, slot numbering, temporary-diagnostic removal planning | Reusable as-is -- invoke as `/review` once symlinked in |
-| `benchmark/` | Running a real-hardware performance KPI campaign: KPI writing, team shape, investigation/rig discipline, recording the result | Reusable as-is -- invoke as `/benchmark` once symlinked in |
+| `review/` | Checking a patch (a port's own vendored `patches/SDL/`, `patches/<engine>/`, or this hub's own `shared/patches/` reference series) against this hub's landing conventions before committing: provenance verification, DJGPP hard constraints, neutral naming, slot numbering, temporary-diagnostic removal planning | Reusable as-is -- `/sdldos:review` via the plugin |
+| `benchmark/` | Running a real-hardware performance KPI campaign: KPI writing, team shape, investigation/rig discipline, recording the result | Reusable as-is -- `/sdldos:benchmark` via the plugin |
 
 ## Adopting a skill into a port repo
 
-**Want `/sdldos:review` instead of `/review`?** This hub is also a real
-Claude Code plugin (`.claude-plugin/plugin.json`, name `sdldos`) -- install
-it once (`/plugin marketplace add <this repo's URL>` then `/plugin
-install sdldos@sdl-dos-ports`) and every skill below is available
-everywhere under that colon-namespaced prefix, no per-repo install step.
-The plugin's own `skills/` directory is just symlinks back into
-`.claude/skills/port` and the entries below -- one source of truth either
-way. See the root `README.md`'s "Prefer namespaced invocation?" section
-for the exact commands. The rest of this section covers the other path:
-per-repo, flat-named, via `npx skills`.
+**Default: the `sdldos` plugin.** This hub is a real Claude Code plugin
+(`.claude-plugin/plugin.json`, name `sdldos`; the root `skills/`
+directory is its skill set -- the hub-only `port` skill plus symlinks
+into the entries above, one source of truth). A port repo enables it
+with a tracked `.claude/settings.json`:
 
-**Preferred for a port repo, self-contained: `npx skills`.** New port repos get every
-current entry from this hub *and* vcctrl automatically --
-`scripts/new-port.sh` runs `npx skills add <repo> --full-depth --all -a
-claude-code` against both at scaffold time (verified working over Forgejo,
-HTTPS or SSH; `--full-depth` is required since neither repo has a
-root-level `SKILL.md`). No subtree/submodule symlink needed for skills
-specifically -- and no `.sdl-dos-ports/` reach-back needed for patches
-either any more (`patches/SDL`, `patches/SDL_mixer` are vendored real
-files, seeded once at scaffold time -- see `docs/patch-conventions.md`).
-The rest of the actual platform code (`shared/build/`,
-`shared/include/runmanifest.h`, `shared/agents/`) still needs
-`.sdl-dos-ports/` (a subtree by default since 2026-08-31, a submodule
-for an older port), since `npx skills` only moves `SKILL.md` content. A
-port that already has skills installed this way picks up new
-ones with `npx skills update`.
+```json
+{
+  "extraKnownMarketplaces": {
+    "sdl-dos-ports": {
+      "source": { "source": "git",
+                  "url": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git" }
+    }
+  },
+  "enabledPlugins": { "sdldos@sdl-dos-ports": true }
+}
+```
+
+`scripts/new-port.sh` writes that file, and the `.gitignore` rule that
+lets it be tracked while the rest of `.claude/` stays local (`.claude/*`
+plus `!.claude/settings.json` -- git can't re-include a file under an
+ignored parent directory, so a bare `.claude/` line would swallow it).
+Anyone who opens and trusts the repo is offered the plugin and gets
+`/sdldos:port`, `/sdldos:review`, `/sdldos:benchmark`,
+`/sdldos:dos-hardware-validation`, ... -- no per-repo copy of any
+`SKILL.md`. The installed plugin is a snapshot keyed by the `version`
+in `.claude-plugin/plugin.json`: `/plugin update sdldos` fetches a new
+version and reports "already at the latest version" otherwise, so every
+skill or layout change here must bump that version (1.0.0 -> 1.0.1 was
+the first such bump, 2026-09-03) or it never reaches an installed copy.
+`claude --plugin-dir <path-to-this-hub>` loads the working tree for one
+session instead (it overrides the installed copy), which is how to test
+a skill edit here before pushing it. The marketplace install copies the
+whole repo into Claude Code's plugin cache with the `skills/` symlinks
+preserved, so they resolve there too (verified 2026-09-03).
+
+**vcctrl's skills are not a plugin** and still install flat, per repo,
+via `npx skills add <vcctrl repo> --full-depth --all -a claude-code`
+(`--full-depth` because that repo has no root-level `SKILL.md`);
+`scripts/new-port.sh` runs this at scaffold time. A port picks up new
+vcctrl skills with `npx skills update`.
 
 **Skills are knowledge; real-hardware access is a separate, deliberate
 step.** `scripts/new-port.sh` will also register vcctrl's MCP daemon
@@ -62,39 +77,26 @@ default), registration is skipped cleanly -- see vcctrl's own
 real URL. This is intentional: a fresh port repo gets vcctrl's
 *knowledge* automatically, not ungated *access* to physical hardware.
 
-A port scaffolded *before* this existed (or before a skill was added here)
-can adopt it the same way, from that port's own root:
+A port scaffolded *before* the plugin existed adopts it by adding the
+`.claude/settings.json` above (and, if its `.gitignore` has a bare
+`.claude/` line, changing that to `.claude/*` + `!.claude/settings.json`
+so the file can be tracked), then deleting whatever flat copies of this
+hub's skills it carried -- `npx skills`-installed `.agents/skills/<name>`
+directories and `.claude/skills/<name>` symlinks for `port`, `review`,
+`benchmark` and the `dos-*` entries -- so Claude Code doesn't show two
+entries per skill. vcctrl's skills stay as they were.
 
-```sh
-npx skills add https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git --full-depth --all -a claude-code
-npx skills add https://forgejo.ecliptik.com/ecliptik/vcctrl.git --full-depth --all -a claude-code
-```
-
-**Fallback, if `npx`/network isn't available: the old symlink method.**
-Re-run `.sdl-dos-ports/shared/scripts/sync-skills.sh` from that port's own
-root to add any missing symlinks for this hub's own skills only (no
-vcctrl skills this way; idempotent, safe to re-run, never touches an
-existing symlink or a deliberate copy). Equivalent by hand for one skill:
-
-```sh
-mkdir -p .claude/skills
-ln -s ../.sdl-dos-ports/shared/skills/dos-hardware-validation .claude/skills/dos-hardware-validation
-ln -s ../.sdl-dos-ports/shared/skills/dos-rig-operations .claude/skills/dos-rig-operations
-ln -s ../.sdl-dos-ports/shared/skills/dos-realhw-verification .claude/skills/dos-realhw-verification
-ln -s ../.sdl-dos-ports/shared/skills/dos-emulator-workflow .claude/skills/dos-emulator-workflow
-ln -s ../.sdl-dos-ports/shared/skills/review .claude/skills/review
-ln -s ../.sdl-dos-ports/shared/skills/benchmark .claude/skills/benchmark
-```
-
-Symlinking (rather than copying) keeps the skill in sync with this hub the
-same way `patches/SDL` and the vendor scripts do -- see
-`plans/DOSKUTSU-MIGRATION-PLAN.md` for the precedent and its one caveat:
-anything that enumerates files by walking a symlinked directory needs `-L`
-(GNU `find`) or the equivalent, or it silently sees nothing. Copying
-instead of symlinking is fine too if a port wants to diverge (e.g. fill in
-port-specific RUNMANIFEST field names inline rather than parameterizing) --
-same tradeoff as the agent charter templates: copy-and-fill-in loses the
-free sync, symlink-and-parameterize keeps it.
+**For an agent that can't load Claude Code plugins** (Codex, Cursor, or a
+first trust with no network), the flat path still works and reads the
+same files: `npx skills add
+https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git --full-depth
+--all -a <agent>` from the port's root; or, with no `npx` at all,
+`.sdl-dos-ports/shared/scripts/sync-skills.sh` symlinks this hub's
+`shared/skills/` entries into `.claude/skills/` (hub skills only -- no
+vcctrl, and no `port`, which is hub-side by design). Expect duplicate
+entries if the plugin is also enabled. The one caveat of symlinked skill
+directories: anything that enumerates files by walking them needs `-L`
+(GNU `find`) or the equivalent, or it silently sees nothing.
 
 ## Provenance
 

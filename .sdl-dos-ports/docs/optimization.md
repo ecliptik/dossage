@@ -25,6 +25,26 @@ spent reasoning about render cost against a problem that had already
 changed character. Re-measure the ratio at the start of *every* new
 optimization pass, don't assume last time's regime still holds.
 
+**A loop-only reading can say "slack" while nearly half the frame is
+being eaten by work the loop never sees.** The spans a main loop
+instruments itself -- render, blit, present, tail -- exclude whatever
+this backend's cooperatively scheduled audio pump does *inside the
+pacer's own `SDL_Delay` sleep*. That cost stays invisible right up until
+it grows large enough to consume the sleep entirely, at which point it
+spills into frame time all at once instead of showing up gradually in
+the loop's own numbers. dossage/Passage hit exactly this on the 486DX2-50
+tier (`docs/BENCHMARK-PLAN.md` there, "Methodology lesson from this
+gate's failure mode", 2026-09-04): audio conversion was taking ~43% of
+every frame while the loop-only spans still read healthy, and after that
+was fixed a much smaller version of the same blind spot (the
+silence-detect throttle, see `docs/audio.md`) still cost 0.08-0.18 fps
+against the KPI line. So the compute-bound gate above has to be re-run
+per CPU tier and per audio configuration with the cooperative background
+work counted: either a diagnostic build that instruments the sleep/yield
+span directly, or an A/B pair across whatever toggle changes that
+background work's volume. A clean "slack" reading from loop spans alone
+is necessary, not sufficient.
+
 ## Likely DOS bottlenecks, roughly in order
 
 1. Full-screen pixel copies.
@@ -95,7 +115,7 @@ measurable cost on this CPU class independent of the arithmetic itself.
 real-hardware fps campaign closed at **14.936/14.932fps** (measured twice
 independently), up from 13.992fps at the campaign's start -- reported
 honestly short of the 15.000fps target rather than tuned to cross it. Run
-`/benchmark` for the campaign checklist this result came from (delay(1) granularity,
+`/sdldos:benchmark` for the campaign checklist this result came from (delay(1) granularity,
 `DOS_Yield()` cost, clock-rate mismatch, and audio-refill were each tested
 and eliminated in turn; the real mechanism was the frame limiter's own
 deadline-vs-actual error, fixed to land within microseconds; the residual

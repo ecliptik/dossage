@@ -145,8 +145,9 @@ three-witness discipline, RUNMANIFEST-driven metric extraction, ABBA
 methodology with pre-registered thresholds, treating a harness bug as a
 bug to fix (not a workaround), and handing off raw data instead of a
 narrated summary. Distilled from a real doskutsu campaign on the vcctrl
-rig — see that skill's `README.md` for provenance and adoption (symlink
-into a port's own `.claude/skills/`, same model as `shared/agents/`).
+rig — see `shared/skills/README.md` for provenance and adoption (it
+reaches every port as `/sdldos:dos-hardware-validation` through the
+hub's `sdldos` plugin).
 
 `shared/skills/dos-rig-operations/` covers the same rig at a lower level
 — input injection, screen capture, file transfer, log collection, and

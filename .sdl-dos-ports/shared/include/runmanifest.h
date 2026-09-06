@@ -45,6 +45,21 @@
  * sign-on string scan) rather than trying to reuse either DOSBox-X signal.
  * realhw is the default when neither positively identifies -- the correct
  * default under "we have no positive signal for anything else" discipline.
+ *
+ * Known limitation, not yet root-caused: the two DOSBox-X signals behind
+ * the AND-gate do not reliably fire under every DOSBox-X config/version --
+ * this is why shared/tools/dosbox-x.conf's [autoexec] sets the operator
+ * override (DOS_PORT_ENVIRONMENT=dosbox-x) unconditionally rather than
+ * relying on auto-detect, and why runmanifest_detect_environment() checks
+ * the override first. A DOSBox-X run with that override unset can
+ * legitimately fall through to REALHW; that is this documented gap, not a
+ * new bug, and reproducing it doesn't mean the AND-gate itself regressed.
+ * Nobody has yet isolated which of the two signals (CPUID hypervisor leaf
+ * vs. INT21h AX=4452h) is the one that misses, or whether it's version-
+ * specific to a given DOSBox-X release -- that needs a DJGPP+DOSBox-X
+ * repro with the per-signal breakdown (see tests/probes/hwinv.c's
+ * HWINV-ENV log lines). Record any such finding in
+ * dos-hardware-validation/references/runmanifest-log.md, not just here.
  */
 
 #ifndef DOS_PORT_RUNMANIFEST_H

@@ -46,51 +46,56 @@ screenshots, performance notes, and features per finished port.
 
 ```sh
 # 1. Claim a candidate and scaffold its repo (run from this hub repo)
-Use the port skill: /port
+Use the port skill: /sdldos:port
 
-# 2. Open the new port repo -- skills from this hub AND vcctrl are
-#    already installed (npx skills, run automatically by /port)
+# 2. Open the new port repo and trust it -- Claude Code offers the sdldos
+#    plugin (this hub's skills, namespaced) from the repo's own
+#    .claude/settings.json; vcctrl's skills are already installed flat
 cd ../<name>
-ls .claude/skills/
+ls .claude/skills/          # vcctrl-* (flat); this hub's are /sdldos:*
 
 # 3. Build in narrow slices: compile -> video -> input -> filesystem
 #    -> audio -> gameplay. See PORTING.md.
 
 # 4. Chasing a real-hardware fps/perf target?
-Use the benchmark skill: /benchmark
+Use the benchmark skill: /sdldos:benchmark
 
 # 5. Landing a patch in shared/ or your own patches/<engine>/?
-Use the review skill: /review
+Use the review skill: /sdldos:review
 ```
 
 | Skill | Runs from | Use it to |
 |---|---|---|
-| `/port` | This hub repo only | Claim a `BACKLOG` candidate and scaffold its repo, charters, and vendor pins. |
-| `/review` | This hub, or any port repo | Check a patch against this hub's own landing conventions before committing it (provenance, DJGPP constraints, naming, numbering). |
-| `/benchmark` | This hub, or any port repo | Run or record a real-hardware performance KPI campaign. |
+| `/sdldos:port` | This hub repo only | Claim a `BACKLOG` candidate and scaffold its repo, charters, and vendor pins. |
+| `/sdldos:review` | This hub, or any port repo | Check a patch against this hub's own landing conventions before committing it (provenance, DJGPP constraints, naming, numbering). |
+| `/sdldos:benchmark` | This hub, or any port repo | Run or record a real-hardware performance KPI campaign. |
+| `/sdldos:dos-emulator-workflow`, `/sdldos:dos-hardware-validation`, `/sdldos:dos-rig-operations`, `/sdldos:dos-realhw-verification` | Any port repo | Local DOSBox-X work, rig campaigns, day-to-day rig mechanics, and real-hardware verification discipline. |
 
-`review` and `benchmark` install into every new port repo automatically,
-alongside every vcctrl skill too — a port doesn't need a separate session
-just to know vcctrl's own conventions. A port scaffolded before one was
-added won't have it yet — see `shared/skills/README.md` for the
-one-command fix.
-
-**Prefer namespaced invocation?** This repo is also a real Claude Code
-plugin (`.claude-plugin/plugin.json`, name `sdldos`) carrying every skill
-above under one colon-namespaced prefix, install once and use from
-anywhere instead of per-repo:
+**How the skills get there.** This repo is a Claude Code plugin
+(`.claude-plugin/plugin.json`, name `sdldos`; the root `skills/` directory
+is its skill set). Every port repo scaffolded by `/sdldos:port` carries a
+tracked `.claude/settings.json` that registers this hub as a plugin
+marketplace and enables the plugin, so anyone who opens and trusts a port
+repo is offered every skill above under the `sdldos:` prefix, with no
+per-repo copy of any `SKILL.md`. This hub's own `.claude/settings.json`
+does the same for sessions here. To install it by hand anywhere else:
 
 ```sh
 /plugin marketplace add https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git
 /plugin install sdldos@sdl-dos-ports
-# then: /sdldos:port, /sdldos:review, /sdldos:benchmark, /sdldos:dos-hardware-validation, ...
 ```
 
-The two paths don't conflict — `npx skills` (flat names, installed into a
-specific port repo, works in Codex/Cursor too) and the plugin (colon
-namespace, installed once, available everywhere) read the same
-`SKILL.md` files under the hood. Pick whichever fits; a port repo can use
-both at once (Claude Code just shows two entries for the same skill).
+The installed plugin is a snapshot keyed by the `version` in
+`.claude-plugin/plugin.json`: `/plugin update sdldos` fetches a new
+version and says "already at the latest version" otherwise, so a skill
+or layout change here must bump that version to reach installed copies.
+`claude --plugin-dir <path-to-this-hub>` loads the working tree for one
+session instead (it overrides the installed copy), which is how to try a
+skill edit here before pushing it. vcctrl's
+skills are not a plugin; `/sdldos:port` installs them flat into the new
+repo via `npx skills`. A port scaffolded before the plugin existed, or an
+agent that can't load plugins (Codex, Cursor), is covered in
+`shared/skills/README.md`.
 
 Deeper reference, only when a skill points you at it:
 [`PORTING.md`](PORTING.md) for the full slice-by-slice porting process.

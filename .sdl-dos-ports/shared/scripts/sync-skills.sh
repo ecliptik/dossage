@@ -2,12 +2,13 @@
 # sync-skills.sh -- symlink any shared/skills/ entry a port repo doesn't
 # have yet into its own .claude/skills/.
 #
-# FALLBACK METHOD: scripts/new-port.sh now prefers `npx skills add`
-# (self-contained, pulls in vcctrl's skills too -- see
-# shared/skills/README.md). This script is for a port that can't use
-# that (no npx/network) or was scaffolded with the older symlink-only
-# method -- it only covers this hub's own skills, not vcctrl's. If npx
-# is available, prefer `npx skills update` instead.
+# FALLBACK METHOD: this hub's skills are normally delivered as the
+# `sdldos` Claude Code plugin, enabled by a port's tracked
+# .claude/settings.json (written by scripts/new-port.sh -- see
+# shared/skills/README.md). This script is for an agent that can't load
+# plugins (Codex, Cursor, no network) -- it only covers this hub's
+# shared/skills/ entries, not vcctrl's and not the hub-side `port` skill,
+# and its flat names duplicate the plugin's if both are wired.
 #
 # A port repo scaffolded before a new skill was added to shared/skills/
 # (e.g. `review`, `benchmark`) has no way to pick it up automatically via
