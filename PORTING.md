@@ -92,22 +92,23 @@ if you haven't set up a remote for it yet), pre-populated from
 `git clone` of the new repo gets `.sdl-dos-ports/` immediately) so the new
 repo can immediately reference `.sdl-dos-ports/shared/...` from its build.
 
-`scripts/new-port.sh` also installs every current skill from this hub
-*and* from vcctrl into the new repo automatically (`npx skills add
-<repo> --full-depth --all -a claude-code`, no manual symlinking) — flat
-names (`/review`, `/benchmark`, vcctrl's own), scoped to that one repo.
-If you'd rather install once and get every skill under one
-colon-namespaced prefix everywhere instead of per-repo, this hub is also
-a real Claude Code plugin:
+`scripts/new-port.sh` also writes the new repo's `.claude/settings.json`,
+which registers this hub as a Claude Code plugin marketplace and enables
+the `sdldos` plugin -- so anyone who opens and trusts the new repo is
+offered this hub's skills under one colon-namespaced prefix
+(`/sdldos:review`, `/sdldos:benchmark`, `/sdldos:dos-hardware-validation`,
+...), with no per-repo copy of any `SKILL.md`. vcctrl's skills are not a
+plugin, so the script installs those flat into the same repo via
+`npx skills add <repo> --full-depth --all -a claude-code`. To install the
+plugin by hand somewhere else:
 
 ```sh
 /plugin marketplace add https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git
 /plugin install sdldos@sdl-dos-ports
-# then: /sdldos:port, /sdldos:review, /sdldos:benchmark, /sdldos:dos-hardware-validation, ...
 ```
 
-Both read the same `SKILL.md` files and don't conflict — see
-`shared/skills/README.md` for the full comparison.
+See `shared/skills/README.md` for adopting it into an older port or from
+an agent that can't load plugins.
 
 Update this repo's `ports.yaml`: set `dos_status: RESEARCH` and
 `port_repo_url` for the candidate you claimed.
@@ -196,7 +197,7 @@ session having to context-switch into rig mechanics, and having a
 bug (see `shared/agents/probe-engineer.md`'s stubify hazard) before it
 reached real hardware. Reach for this shape once a port is doing genuine
 iterative real-hardware investigation (repeated hypothesis-test-measure
-rounds), not for a single one-off validation run. See the `/benchmark`
+rounds), not for a single one-off validation run. See the `/sdldos:benchmark`
 skill for the full campaign checklist this shape is part of.
 
 ## 5. Real-hardware QA
@@ -207,7 +208,7 @@ to validate on real hardware via vcctrl, using
 as your project's profile. Record results with
 [`templates/BENCHMARK.md`](templates/BENCHMARK.md). Once a port needs to
 chase a specific performance KPI rather than a one-off check, run
-`/benchmark` — the campaign checklist distilled from a real one, tying
+`/sdldos:benchmark` — the campaign checklist distilled from a real one, tying
 together `docs/optimization.md`'s KPI-writing policy and the
 `dos-hardware-validation` skill's investigation/rig discipline.
 

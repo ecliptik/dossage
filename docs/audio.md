@@ -155,6 +155,31 @@ verification than what's noted here. Organized architecture-wide first
   unconditional run-to-cap loop** when calling `SDL_DOSAudioPump()` every
   frame, especially for a port targeting a frame rate at or below the
   cooperative-scheduler audio floor documented above.
+- **The silence-detect throttle (`SDL_HINT_DOS_SILENCE_DETECT`,
+  `shared/patches/sdl3-dos/0054` + `0056`) has a real fps cost whose shape
+  depends on the workload, and whether its killswitch is safe depends on
+  the port.** Default-ON, `PlayDevice` scans each mixed chunk for
+  all-silence and, on silence, skips the ring write and sleeps
+  `SDL_Delay(10)` as a throttle. Two ports have now measured it costing
+  two different things. doskutsu's wave-35 A/B attributed a continuous
+  +3.34 ms per flip to the scan on an always-busy mix (recorded in
+  `0056`'s own commit message). dossage/Passage on a 486DX2-50 paid
+  nothing steady-state, but during the quiet passages of its looping
+  music track, where nothing gets written to the ring, every cooperative
+  pacer yield paid the 10 ms sleep -- three ~20 s windows per life,
+  aligned to the song's loop points, enough to fail a 14.90 fps KPI line
+  by 0.08-0.18 fps until `SDL_HINT_DOS_SILENCE_DETECT=0` was set before
+  `SDL_Init` (`docs/benchmarks/mach64-215ct-486dx2-50-round2-2026-09-04.md`
+  and `round3` there, 2026-09-04). Treat the hint's cost as
+  workload-shaped -- a small continuous tax on busy audio, a periodic
+  larger one on audio with real silence in it -- and A/B it per port
+  rather than quoting either number. **The killswitch is only safe for a
+  port that does not depend on the silence-detect path for SFX
+  correctness:** `0056`'s own message warns that under the OPL3/AdLib
+  music backend the shared SfxSynth IRQ-mix never propagates without it,
+  so doskutsu's SFX go silent with `=0`; Passage's audio is a plain
+  sample stream with no SfxSynth, which is why `=0` was a clean fix
+  there. Check which of those your port is before copying the fix.
 - **A worse variant of the above can hang indefinitely, and it's
   CPU-tier-specific.** If the audio thread is in-band/non-silent and never
   yields back while the main thread parks at a per-flip yield, the ring
