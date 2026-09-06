@@ -220,6 +220,38 @@ staged binary before staging *and* after sending, and confirming
 staged — both are this repo's own gate, not a vcctrl mechanic, but belong
 in the same round as the steps above.
 
+**Launch DOSSAGE.EXE with its stdout redirected to a file, every time —
+a bare `DOSSAGE` at the prompt loses the primary metric.** Confirmed
+2026-09-04 (ViRGE + 486DX2-50 leg): `game.cpp`'s
+`printf("Frame rate = ... fps (%d frames)\n", ...)` — the "Average FPS"
+line every benchmark doc in this campaign leads with — only goes to the
+DOS console device, never to a file, unless the launch command redirects
+it. DOS text mode has no scrollback, and the CWSDPMI exit-stats banner
+prints right after that line and scrolls it off-screen, so a missed
+redirect is not recoverable after the fact — it costs a full re-run.
+RUNMANIFEST's `fps_p50`/`fps_p95` are unaffected (that write goes to a
+file regardless), but they alone can't score a leg against the
+average-fps KPI band. Launch as `DOSSAGE > FPS.TXT` (or any filename
+that doesn't collide with a stale file left over from an earlier launch
+this session — the Am5x86-133 leg's own Notes record a
+`FPUSTDO.TXT`/`RUNSTDOU.TXT` naming mixup from exactly that).
+
+**A destination directory name typo lands you in the wrong game
+entirely, and it plays as a crash, not an error.** Confirmed 2026-09-04:
+staging to `C:\DOSKUTSU` instead of `C:\DOSSAGE` (misreading the boot
+banner's own unrelated-QA-game instructions) launched cleanly as far as
+DOS is concerned, then `DOSSAGE.EXE` page-faulted immediately in that
+foreign environment — nothing about the fault pointed at the actual
+cause. If a launch that staged clean crashes instantly, check `CD` /
+the prompt path before suspecting the build. Recovery is a plain `DIR`
+-> delete-what-you-added -> re-stage-to-the-right-directory -> re-`DIR`
+to confirm the original tree is intact; if the two DOS ports on this rig
+happen to vendor the identical upstream CWSDPMI build (they do, per
+doskutsu's own `THIRD-PARTY.md`), overwriting one game's `CWSDPMI.EXE`/
+`.DOC` with the other's copy of the same file during that mixup is a
+no-op, not a corruption — still worth a note to whichever session finds
+the timestamp changed later.
+
 ## 5. Capture-mode practice while a run is going
 
 - Prefer `vcctrl_burst` over `vcctrl_shot` to confirm what just landed on
@@ -238,7 +270,72 @@ in the same round as the steps above.
   does not prove any particular text rendered. Use it for "is the target
   responsive at all," a burst for "what does the screen actually show."
 
-## 6. Cross-references
+## 6. DOSSAGE launch lessons from the Phase 2 campaign (2026-09-04)
+
+Learned the hard way during the DX2-50 Rounds 1-3 fix-validation campaign
+(`docs/BENCHMARK-PLAN.md`, `docs/benchmarks/mach64-215ct-486dx2-50-round{1,2,3}-2026-09-04.md`)
+-- DOSSAGE-specific, not generic vcctrl mechanics, which is why this lives
+here rather than in the vcctrl repo's own docs.
+
+- **A cold boot means an empty DOS environment.**
+  `SET SDL_HINT_DOS_FORCE_MODE_ID=0x0111` does not persist across a power
+  cycle -- it must be re-typed before the *first* Mach64 launch of a
+  session, every time. Skipping it once let the Mach64 negotiate its
+  unforced default (512x384), which produces two symptoms that are easy
+  to misread:
+  - the primary VGA capture stick cannot lock this mode (reads
+    `state: "frozen"`, judged as no picture) -- **this is a capture-lock
+    failure, not a hang**;
+  - the physical monitor shows a squashed strip across the top rows, not
+    a full picture -- also not a hang, just an unvalidated video mode
+    actually rendering.
+  Combined with `vcctrl_verify_input`'s LED check failing (see below) and
+  real power draw, this can look exactly like the RDTSC-wedge-under-
+  EMM386 hang signature from the CPU-identity investigation. **Confirm
+  with the operator directly (can they move the character?) before
+  reaching for a power cycle** -- a false hang report cost a round-trip
+  here.
+- **The title screen is silent by design.** The game sets loudness to 0
+  before the first title and only raises it once a key or event starts
+  the life. Silence at the title is not evidence of an audio fault.
+- **`vcctrl_verify_input`'s LED round-trip proves nothing while DOSSAGE/
+  SDL owns the keyboard controller.** SDL grabs INT 9 directly during any
+  run and does not toggle keyboard LEDs at all -- a failed LED check
+  during a DOSSAGE run just means SDL is in control (expected), not that
+  the PS/2 link is dead. This is stronger than section 5's general LED-
+  check caveat above: during a DOSSAGE run specifically, the LED
+  round-trip is not merely imprecise, it is not a valid test at all.
+- **The first life can start on ANY key or joystick event, not
+  necessarily the operator's intended keypress.**
+  `waitForKeyOrButton()` returns on `SDL_EVENT_KEY_UP` as well as
+  `KEY_DOWN` -- even the *release* of the Enter key used to launch
+  `DOSSAGE.EXE` can start the life, if it arrives after SDL installs its
+  keyboard handler. Every run's `STDOUT.TXT` reports `"Found 1
+  joysticks"` -- a floating/unconnected gameport can also deliver a
+  spurious button event at an unpredictable moment. Net effect:
+  launch-to-title wall-clock brackets carry tens of seconds of slop
+  (33-166s observed across this campaign) that is **not clock loss** --
+  confirmed directly via an independent in-game CMOS RTC witness, which
+  agreed with the engine's own clock to 0.0% across two separate real
+  lives. Get the true life-start timestamp from the capture timeline
+  (poll for the title-to-gameplay transition, or `vcctrl_pin` the ring
+  before launch) rather than from the launch or title-reappear
+  timestamp, if the life interval itself needs to be exact.
+- **DOSSAGE's own exit sequence**: at the title screen, Escape counts as
+  "a key" and starts a new life rather than exiting -- only an in-game
+  Escape quits. Reliable two-step exit: press Escape once when the title
+  reappears (starts a short life-2), wait ~3s, press Escape again
+  (in-game -- clean exit). This leaves a short (<20s) trailing
+  RUNMANIFEST block, expected and filterable by duration in analysis.
+- **`build_sha12` path caveat**: recomputable via `make build-sha12`, but
+  only from the exact worktree a build came from -- a feature-branch
+  build made in an isolated worktree (e.g. `/home/claude/git/dossage-dx2-50`)
+  will not necessarily reproduce the same hash if recomputed from a
+  different checkout of the same branch/commit. Confirm which worktree a
+  given `build_sha12` was generated in before treating a mismatch as a
+  real discrepancy rather than a path artifact.
+
+## 7. Cross-references
 
 All of the following live in the `vcctrl` repo, not this one:
 

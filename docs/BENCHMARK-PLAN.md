@@ -1,11 +1,116 @@
 # DOSSAGE benchmark plan -- 486DX2-66 video-card matrix
 
+**Current status, 2026-09-05: full 3-card x 4-CPU matrix (Mach64,
+ViRGE, Cirrus x 486DX2-50, 486DX2-66, Am5x86-133, Pentium OverDrive 83
+-- twelve pairings) is measured on the current merged fix build
+(`build_sha12=a5e9835f12e7`) and every cell PASSES.** This closed in
+stages through 2026-09-04/05 -- see the dated entries below for how
+each sweep went and the "one second over" characterization finding
+that came out of closing the last few gaps. Nothing left queued in
+this matrix as of this writing.
+
 Written against the hub's `benchmark` skill. Status: **486DX2-66 video-card
 matrix complete (2026-09-03)** -- Cirrus, ViRGE, and Mach64 all measured.
 **Scope expanded 2026-09-03, operator-directed, into a CPU dimension** this
 doc originally declined to cover (see "The matrix" below and the CPU-tier
 table added there) -- 486DX2-50 + Mach64 is the first cell of that
-expansion, in progress.
+expansion. **486DX2-50's own three-round fix-validation arc (pacer-timing
++ audio-tier fixes, then Phase 2 optimization) is now CLOSED, 2026-09-04:
+KPI met, `patches/passage/0036`/`0038`-`0041` land the DX2-50, the port's
+own minimum-target hardware, at a solid 14.99fps average.** See "The
+matrix" below and Rounds 1-3
+(`docs/benchmarks/mach64-215ct-486dx2-50-round{1,2,3}-2026-09-04.md`).
+
+**`dx2-50-15fps` MERGED to `main` 2026-09-04 as `2881cfc`** (no-ff, the
+user's explicit "Yes merge"; not pushed to the remote). All fixes referenced
+below as "not yet landed"/"in progress" earlier the same day are now on
+`main` -- read those mentions as historical. Raw rig logs for the campaign
+moved out of the `dossage-dx2-50` worktree into this repo's own untracked
+`rawlogs/dx2-50-campaign-2026-09/` (see `rawlogs/README.md`); the round
+records below cite that path now, not the worktree.
+
+**Mach64: all four CPU tiers have a datum, but not all on the current
+build -- see the correction dated 2026-09-05 further down and in the
+Mach64 CPU-tier expansion section.** The tier that needed a
+fix-validation arc (486DX2-50, the port's own minimum target) closed at
+KPI PASS on the fix. Am5x86-133 and POD83 are still on the pre-merge
+build; not queued as of this writing, but not "done" in the same sense
+ViRGE/Cirrus below are.
+
+**ViRGE CPU-tier sweep CLOSED, 2026-09-04.** All four CPU tiers
+(486DX2-50, 486DX2-66, Am5x86-133, Pentium OverDrive 83) now have a
+ViRGE datum on the merged fix build (`build_sha12=a5e9835f12e7`),
+matching the Mach64 sweep's coverage -- **every leg PASSED**, and every
+CPU with pacer slack (all but 486DX2-50) landed on the identical
+15.016779fps/4475-frame figure, five independent CPU/card combinations
+total now confirming that's the design's deterministic ceiling-hit
+signature. The 486DX2-66 run also closed a real gap: the original
+486DX2-66+ViRGE datum predated the audio-tier fix and was never
+independently re-measured against it -- now it has been, clean. See
+"The matrix" below (ViRGE CPU-tier expansion) and
+`docs/benchmarks/virge-86c375-{486dx2-50,486dx2-66,am5x86,pod83}-2026-09-04.md`.
+Nothing left queued for the ViRGE sweep.
+
+**Cirrus CPU-tier sweep started 2026-09-04.** First cell (Pentium
+OverDrive 83 -- also the first Cirrus datum on the merged build)
+**PASS, 15.016779fps**, `build_sha12=a5e9835f12e7` -- the sixth
+appearance of that same fps/frame-count signature and the first on a
+banked (not LFB) card. Hit and recovered from the same
+UVCONFIG-not-yet-run gap the original ViRGE swap did. See "The matrix"
+below (Cirrus CPU-tier expansion) and
+`docs/benchmarks/cirrus-cl-gd5434-pod83-2026-09-04.md`.
+
+**Second cell, 2026-09-05, found a real exception, corrected in place
+rather than left as the overclaim it briefly was.** The POD83 result
+above was read (in this banner and that file's own writeup) as proving
+the 15.016779fps signature "video-path-independent as well as
+CPU-tier-independent" -- wrong, not merely premature. Cirrus (banked) +
+486DX2-66, re-confirmed on the merged build (PASS, KPI-clearing), landed
+on **14.966555fps (299s, not 298s, same 4475 frames)**, reproduced
+identically across two independent lives, not scatter. Working
+explanation: banked's known extra per-frame cost vs. LFB is small
+enough to be absorbed by POD83's headroom but apparently just enough to
+tip 486DX2-66's tighter margin over the 298/299-second rounding
+boundary -- two orders of magnitude smaller than the 486DX2-50 tier's
+compute-bound story, doesn't threaten the KPI, but breaks the
+otherwise-universal signature. See "The matrix" below and
+`docs/benchmarks/cirrus-cl-gd5434-486dx2-66-2026-09-05.md`.
+
+**Third cell, same day: 486DX2-50, the port's own minimum-target CPU,
+PASS at 14.966555fps -- and the banked-path effect did not scale up at
+the tighter margin as feared.** Identical 299s/4475-frame shape to the
+486DX2-66 result, exactly the same magnitude rather than a worse one.
+Completes KPI confirmation on all three supported video cards at this
+CPU tier (Mach64 Round 3, ViRGE, now Cirrus). See
+`docs/benchmarks/cirrus-cl-gd5434-486dx2-50-2026-09-05.md`.
+
+**Fourth and closing cell, same day: Am5x86-133, PASS at the usual
+15.016779fps (298s).** Both 486DX2 tiers show the 299s "one second
+over" effect; both faster tiers (Am5x86-133, this cell, and POD83, the
+sweep's opening cell) land exactly on the campaign's usual signature
+with no measurable video-path penalty at all *within Cirrus*. **This
+read as a clean CPU-tier boundary at the time -- revised the very next
+day, see the 2026-09-05 Mach64+Am5x86-133 entry above and in the Mach64
+section below: this same CPU tier (Am5x86-133) shows the "one second
+over" effect on Mach64, meaning it is not a CPU-tier boundary after
+all.** Left as it was written below, correction stated once here rather
+than rewritten throughout. **Closes the Cirrus CPU-tier
+sweep: all four CPU tiers now have a Cirrus datum, every one PASS.**
+See `docs/benchmarks/cirrus-cl-gd5434-am5x86-2026-09-05.md`. Nothing
+left queued for Cirrus.
+
+**Correcting a claim in the process of writing this**: ViRGE and Cirrus
+now genuinely have all four CPUs measured *on the merged fix build*
+(`a5e9835f12e7`). Mach64 does not, despite this doc's own earlier
+"nothing queued for Mach64" language -- its Am5x86-133 and POD83 rows
+below are both still `build_sha12=f1f867ccadad`, which predates the
+merge (`2881cfc`) and therefore predates the audio-tier and
+pacer-timing fixes entirely, the exact same gap the original
+486DX2-66+ViRGE datum had before it got re-confirmed. Only Mach64's
+486DX2-50 cell went through the actual Round 1-3 fix-validation arc.
+Not re-measured as part of this session's work since the operator
+didn't direct it here -- flagging so "the matrix is done" isn't
+overstated. See the Mach64 CPU-tier expansion section below.
 
 **AUDIO-TIER MISMATCH BUG, found 2026-09-03, affects every recorded result
 in this campaign.** The committed `vendor/passage/gameSource/music/SONG.WAV`
@@ -16,12 +121,32 @@ plays at the wrong rate ("wrong-speed, wrong-pitch playback," per that
 file's own code comment). Confirmed on the physical target for every leg
 (`DIR` = 2,998,844 bytes, the wrong file). `AUDIO_PRESENT` verdicts
 throughout this doc and every `docs/benchmarks/` file confirm audio was
-playing, never that it played correctly -- read them that way. Does not
-affect any recorded fps number (the audio-pump callback's per-frame cost
-is byte-count-driven, not content-driven), but is not yet independently
-confirmed. `build_sha12` does not cover this bug at all -- see each
-benchmark file's own Notes for the full mechanism and the fix in progress
-(`15fps` session, patches `0036`/`0037` + a hard `make stage` guard).
+playing, never that it played correctly -- read them that way. `build_sha12`
+does not cover this bug at all -- see each benchmark file's own Notes for
+the full mechanism.
+
+**Fix real-hardware-confirmed 2026-09-04, MERGED to `main` the same day
+(`2881cfc`).** Round 1
+(`docs/benchmarks/mach64-215ct-486dx2-50-round1-2026-09-04.md`) staged and
+ran both a high-tier and a correctly-matched low-tier build on the same
+486DX2-50 + Mach64 hardware: low-tier landed at ~14.79fps (same band as
+every 486DX2-66 result), high-tier at ~9.9-10.2fps reported -- a ~4.75fps
+delta, confirming the fps impact this doc's original text (below) predicted
+would be *absent* was in fact real and large. **That original prediction
+("fps numbers are not expected to be affected") was wrong, corrected here
+rather than left standing**: the audio tier changes how much per-chunk
+format-conversion work `SDL_DOSAudioPump` does (stereo/16-bit source vs.
+mono/16-bit, both converted down to the device's fixed 8-bit-mono-22050Hz
+format), and on this CPU tier that conversion cost is large enough to be
+the dominant per-frame cost (~43% of every frame at the high tier, per
+Round 1's per-stage diagnostic). **Round 1 also raised a tick-loss theory
+for why the high-tier number might be further inflated -- Round 2's
+in-game CMOS RTC witness directly measured this and found no loss
+(`RTC elapsed = 304s = engine time(NULL)`, 0.0% gap); struck, see the
+pacer-timing entry below.** Both fixes ship together in the same
+`15fps`-owned patches (`0036`, `0038`-`0041` -- `0037` was a temporary
+diagnostic, removed by `0038` -- plus the `make stage` guard), merged to
+`main` 2026-09-04 as `2881cfc`.
 
 ## What kind of campaign this is
 
@@ -58,15 +183,87 @@ bottleneck list is the wrong tool here; `docs/timing.md`'s pacer material is
 the right one. Re-check this if the CPU ever changes -- the regime can shift
 between campaigns -- but on this CPU it is settled.
 
-**The CPU changed, 2026-09-03 -- this needs re-checking, not yet done.**
-486DX2-50 + Mach64's first datum came back at 13.685015fps, a real drop
-from the ~14.77-14.82fps band every 486DX2-66 run landed in -- the first
-evidence this port may no longer be comfortably pacer-bound at this slower
-tier. **Not yet confirmed**: re-running the compute-bound gate (real
-per-frame work vs. the 66.67ms budget, on this CPU specifically) hasn't
-happened. Don't assume either regime for 486DX2-50 -- measure it before
-drawing conclusions from any 486DX2-50 result. See
-`docs/benchmarks/mach64-215ct-486dx2-50-2026-09-03.md`.
+**The CPU changed, 2026-09-03 -- partially re-checked by Round 1
+(2026-09-04), not a full formal re-run of this gate.** 486DX2-50 +
+Mach64's first datum came back at 13.685015fps, a real drop from the
+~14.77-14.82fps band every 486DX2-66 run landed in. Round 1's per-stage
+diagnostic build gives the actual answer for the audio-tier-corrected
+low-tier case: **still pacer-bound, not compute-bound** -- low-tier
+audio lands right at the 66.67ms budget (~67.6ms/frame measured, ~54ms
+game work + ~12ms audio) and `fps_p50=15.00` sits exactly on the design
+ceiling. The high tier is a different story: audio-conversion cost alone
+(~43ms/frame) plus game work (~54ms) pushes every frame over budget --
+genuinely compute-bound at the high audio tier on this CPU, which is
+Phase 2's whole reason for existing (device-native audio format, L1c).
+So: 486DX2-50 is pacer-bound at the low tier (matches 486DX2-66's
+regime) and compute-bound at the high tier -- not a single regime for
+this CPU, it depends on the audio tier. See
+`docs/benchmarks/mach64-215ct-486dx2-50-2026-09-03.md` (original,
+now-corrected datum) and
+`docs/benchmarks/mach64-215ct-486dx2-50-round1-2026-09-04.md` (the
+per-stage breakdown this conclusion is drawn from).
+
+**GATE CLOSED, 2026-09-04, Round 3: the high tier is pacer-bound again
+after the fix.** `patches/passage/0039`/`0040`/`0041` (device-native
+audio, 16bpp blowup, silence-detect hint) collapse the high-tier audio
+path's cost back down. Measured per-frame breakdown across all three
+rounds (steady-state windows only, `STAGEDBG.LOG`, all high-tier audio
+on 486DX2-50 + Mach64):
+
+| Stage | Round 1 (D, pre-fix) | Round 2 (D2, L1c+L2 only) | Round 3 (D3, +silence-detect) |
+|---|---|---|---|
+| `render` | 32.3ms | ~31.3ms | (not separately re-quoted; steady) |
+| `blowup` | 11.9ms (fixed cost) | **3.63-3.64ms** | ~3.64ms |
+| `present` | 2.4ms | ~2.3ms | (steady) |
+| `tail` | 7.4ms | ~7.3ms | (steady) |
+| `pump` | 32.4ms (flat-out) | 0.00-0.74ms steady, **8.8-9.78ms in 3/15 windows** (song loop points) | **0.00-0.37ms every window, 0-22 calls** |
+| `pacer` (yield/sleep) | 10.3ms (cooperative yield, frame over budget) | 12.71-21.27ms | 18.5ms slack average, real sleep |
+| over-budget frames | ~300/300 every window | 3-4/300 steady windows, 67-77/300 in the 3 loop-point windows | 85/3900 total |
+| reported avg fps | 9.90-10.19 | 14.72-14.82 (fails 14.90 KPI line by 0.08-0.18) | **14.97-15.02 (PASS)** |
+
+Round 1's high tier: audio conversion alone ate ~43% of every frame,
+genuinely compute-bound. Round 2's L1c+L2 fixes removed the *steady-state*
+cost (`blowup` -11.85ms->3.64ms is the single biggest per-frame win) but
+left a periodic cost concentrated in 3 windows per life, aligned to the
+136s-long song's loop points -- the shared platform's silence-detect
+throttle (`SDL_HINT_DOS_SILENCE_DETECT`) sleeping 10ms per pump call
+during quiet passages where nothing gets written to the ring, still
+enough to fail the KPI by a small margin (14.818fps average). Round 3's
+`0041` (a one-line `SDL_HINT_DOS_SILENCE_DETECT=0` before `SDL_Init`)
+removed that too -- `pump` is now near-zero in every window, not just
+most of them, and the DX2-50 is back to a comfortable pacer-bound regime
+(~18.5ms/frame slack) matching the 486DX2-66's original characterization,
+now on the port's own minimum-target hardware. **KPI met: G's two Round
+3 lives averaged 14.992fps.** See
+`docs/benchmarks/mach64-215ct-486dx2-50-round2-2026-09-04.md` and
+`docs/benchmarks/mach64-215ct-486dx2-50-round3-2026-09-04.md`.
+
+**Methodology lesson from this gate's failure mode, worth generalizing
+past this one campaign (hub-worthy -- recorded here first, per this
+project's own policy of landing genuinely general findings in the hub
+only as a deliberate, separate step, not as a side effect of a port-local
+doc pass).** A per-frame *game-loop* work measurement -- summing render,
+blowup, present, tail, i.e. the spans the main loop itself executes --
+looks like it answers "are we compute-bound," but it silently excludes
+whatever a cooperative background thread does *during the pacer's own
+sleep*. On this port, the audio thread's `SDL_DOSAudioPump` iterates
+cooperatively inside that sleep window, not inside any span the game
+loop's own instrumentation sees. The result: a CPU can show a healthy
+"slack, not compute-bound" reading right up until that background cost
+grows large enough to consume the sleep entirely and start spilling into
+frame time -- at which point it appears in full, all at once, rather
+than growing visibly in the measurement first. That is exactly how 43%
+of the frame stayed invisible to a loop-only measurement at the 486DX2-50
+tier (Round 1) and how a much smaller version of the same blind spot
+(the silence-detect throttle) still cost 0.08fps against the KPI even
+after the main fix landed (Round 2). **Practical consequence: the
+Section 1 compute-bound gate must be re-run per CPU with the
+background/cooperative work counted, not just the game loop's own
+spans** -- either via a diagnostic build that instruments the pacer's
+sleep/yield span directly (this campaign's `STAGEDBG.LOG` approach), or
+via an A/B run pair across the two audio tiers on the CPU in question, if
+a dedicated diagnostic build isn't available. A clean "slack" reading
+from loop spans alone is necessary, not sufficient.
 
 ## Pre-campaign work item: the KPI needs percentiles (CLOSED 2026-09-02)
 
@@ -222,26 +419,141 @@ first 486DX2-50 datum already shows one (see Section 1, above).
 
 | Card | State | What this run is for |
 |---|---|---|
-| Cirrus CL-GD5434 | **re-confirmed 2026-09-02, twice: 14.82 fps (`9c90db0e7905`), 14.77 fps (`f1f867ccadad`)** | Reference/repeatability. Runs banked -- SDL/0019 force-disables LFB for a genuine aperture defect. Two runs, two different builds, both in-band -- see `docs/benchmarks/cirrus-cl-gd5434-2026-09-02.md` and `...-f1f867ccadad.md`. |
-| S3 ViRGE 86C375 | **re-confirmed 2026-09-03, 14.82 fps** (build `f1f867ccadad`) | Reference/repeatability. Uses LFB at 320x240x16 -- see `docs/benchmarks/virge-86c375-2026-09-03.md`. |
-| ATI Mach64 215CT/-ET | **Gate passed, first datum 2026-09-03: 14.77 fps** (build `f1f867ccadad`) | Gated and measured -- see below and `docs/benchmarks/mach64-215ct-2026-09-03.md`. No established reference to compare against (only prior figure is a different CPU tier, pre-pacer-work). |
+| Cirrus CL-GD5434 | **re-confirmed 2026-09-02, twice: 14.82 fps (`9c90db0e7905`), 14.77 fps (`f1f867ccadad`)**; **re-confirmed again 2026-09-05, 14.966555 fps, on the merged fix build** (`build_sha12=a5e9835f12e7`) | Reference/repeatability. Runs banked -- SDL/0019 force-disables LFB for a genuine aperture defect. The 2026-09-05 re-confirmation also found a small, reproducible "one second over" fps effect specific to this CPU tier on the banked path -- see `docs/benchmarks/cirrus-cl-gd5434-486dx2-66-2026-09-05.md` for the full finding; earlier runs are `docs/benchmarks/cirrus-cl-gd5434-2026-09-02.md` and `...-f1f867ccadad.md`. |
+| S3 ViRGE 86C375 | **re-confirmed 2026-09-03, 14.82 fps** (build `f1f867ccadad`); **re-confirmed again 2026-09-04, 15.016779 fps, on the merged fix build** (`build_sha12=a5e9835f12e7`) -- closes the "never independently re-measured" audio-tier-fix gap that run's own Notes flagged. | Reference/repeatability. Uses LFB at 320x240x16 -- see `docs/benchmarks/virge-86c375-2026-09-03.md` and `docs/benchmarks/virge-86c375-486dx2-66-2026-09-04.md`. |
+| ATI Mach64 215CT/-ET | Gate passed, first datum 2026-09-03: 14.77 fps (build `f1f867ccadad`, pre-merge). **Re-confirmed 2026-09-05 on the merged build (`build_sha12=a5e9835f12e7`), PASS: 15.016779 fps**, clean 298s signature -- closes the campaign's last pairing still exclusively on the pre-merge build. | Gated and measured -- see below, `docs/benchmarks/mach64-215ct-2026-09-03.md`, and `docs/benchmarks/mach64-215ct-486dx2-66-2026-09-05.md`. |
 
-### CPU-tier expansion (in progress, started 2026-09-03)
+### Mach64 CPU-tier expansion (CLOSED, 2026-09-04; partially stale as of 2026-09-05, see correction below)
 
 Roster from `profiles/dossage.yaml`'s `machines` table / the hub's
-`HARDWARE.md` primary matrix: 486DX2-66 (done, above), 486DX2-50 (dossage's
-own tracked `dos_minimum_target`/`dos_recommended_target` per the hub's
-`ports.yaml` -- in progress), Am5x86-133 (not started), Pentium OverDrive 83
-(has only pre-pacer-work data, not comparable, not started under the
-current build). Each CPU swap needs its own video-card sweep in principle;
-started with Mach64 first on 486DX2-50 since it's already staged and its
-`SDL_HINT_DOS_FORCE_MODE_ID` requirement is confirmed CPU-independent.
+`HARDWARE.md` primary matrix: 486DX2-66, 486DX2-50 (dossage's own tracked
+`dos_minimum_target`/`dos_recommended_target` per the hub's `ports.yaml`),
+Am5x86-133, Pentium OverDrive 83. Started with Mach64 first since it was
+already staged and its `SDL_HINT_DOS_FORCE_MODE_ID` requirement is
+confirmed CPU-independent. **All four CPUs have a Mach64 datum; the
+486DX2-50 leg's fix-validation arc closed at KPI PASS.**
+
+**Correction, 2026-09-05, found while closing out the ViRGE/Cirrus
+sweeps**: this section's "nothing left queued for Mach64" and the table
+below's "on the current, merged build" phrasing overstated it. Only
+486DX2-50 actually went through the fix-validation arc and reflects the
+audio-tier/pacer-timing fixes. The Am5x86-133 and POD83 rows below are
+both still `build_sha12=f1f867ccadad`, which predates the `2881cfc`
+merge -- the exact same "never independently re-measured against the
+fix" gap the original 486DX2-66+ViRGE datum had before it got
+re-confirmed (`docs/benchmarks/virge-86c375-486dx2-66-2026-09-04.md`).
+Not re-measured as part of the ViRGE/Cirrus sweep work since the
+operator didn't direct it there -- flagging rather than silently
+carrying the overstatement forward.
+
+**Am5x86-133 re-measured on the merged build, 2026-09-05 -- and it
+revised the Cirrus sweep's own conclusion, not just closed a gap.**
+`docs/benchmarks/mach64-215ct-am5x86-2026-09-05.md`: PASS, but landed
+on the "one second over" 299s/14.966555fps shape -- the same effect
+Cirrus's 486DX2 tiers showed, at a CPU tier that hit the clean
+298s/15.016779fps signature on BOTH ViRGE and Cirrus. That breaks the
+"clean CPU-tier boundary, not a gradient" reading the Cirrus sweep
+reached (see that section below) -- see this file's Notes for the
+revised picture (framebuffer-byte-count and/or boundary-adjacent
+run-to-run jitter, neither confirmed via instrumentation) and a
+re-reading of Round 3's own G1/298s-G2/299s-D3/299s split on identical
+486DX2-50+Mach64 hardware as supporting evidence for jitter over strict
+determinism.
+
+**POD83 re-measured on the merged build, 2026-09-05, same day: PASS at
+15.016779fps, the clean 298s signature** -- unlike Am5x86-133 (a
+slower CPU) at the same card/build, which landed at 299s. Same
+`fps_p95` (14.96) as that leg despite the different rounding outcome,
+consistent with the jitter reading above rather than the effect being
+fixed by CPU speed. See `docs/benchmarks/mach64-215ct-pod83-2026-09-05.md`.
+
+**CLOSED, 2026-09-05, same day: Mach64+486DX2-66 re-confirmed on the
+merged build, PASS at 15.016779fps, clean 298s signature.** This was
+the last pairing in the whole 3-card x 4-CPU matrix still exclusively
+on the pre-merge build -- **every cell (Mach64/ViRGE/Cirrus x
+486DX2-50/486DX2-66/Am5x86-133/POD83, twelve pairings) is now measured
+on `build_sha12=a5e9835f12e7` and PASSES.** See
+`docs/benchmarks/mach64-215ct-486dx2-66-2026-09-05.md`, which also
+carries the full twelve-cell "one second over" summary table -- the
+effect does not reduce to CPU tier, video path, or framebuffer size
+alone; ViRGE never shows it, the other two cards each show it on a
+different, non-overlapping subset of CPU tiers, and 486DX2-50+Mach64
+(the tightest-margin pairing) has flipped between both outcomes across
+repeat lives. Working explanation: overall margin sets how close a
+pairing sits to the rounding boundary, and per-life timing jitter
+decides which side any individual life lands on for anything close
+enough. Does not threaten the KPI anywhere. Nothing left queued in this
+matrix.
+
+Each CPU swap needs its own video-card sweep in principle -- Mach64's is
+done, Cirrus's and ViRGE's are not. **Next up, per the operator: ViRGE.**
+Only 486DX2-66 has a ViRGE datum so far (see the 486DX2-66 matrix,
+above); 486DX2-50/Am5x86-133/Pentium OverDrive 83 do not yet, and none of
+the three have been re-run against the merged `main` build at all. Not
+started as of this writing.
 
 | CPU | Card | State |
 |---|---|---|
-| 486DX2-50 | ATI Mach64 215CT/-ET | **First datum 2026-09-03: 13.685015 fps** (build `f1f867ccadad`). No reference to compare against. See `docs/benchmarks/mach64-215ct-486dx2-50-2026-09-03.md`. |
-| Am5x86-133 | ATI Mach64 215CT/-ET | **First datum 2026-09-03: 15.016779 fps** (build `f1f867ccadad`) -- fastest of the campaign, essentially at the design ceiling. CPU identity's `~100MHz`/`FPU: no` dinspect reading was chased down and confirmed as two real dinspect detection bugs (stale INT 11h FPU bit, over-generic AMD speed table), both fixed upstream same day -- the chip really is a working Am5x86-133. See `docs/benchmarks/mach64-215ct-am5x86-2026-09-03.md`. |
-| Pentium OverDrive 83 | ATI Mach64 215CT/-ET | **First datum 2026-09-03: 14.966555 fps** (build `f1f867ccadad`) -- same near-ceiling band as Am5x86-133. **CPU identity RESOLVED**: two real dinspect bugs (an unbounded TSC-calibration hang leaving a stale Am5x86-era report behind, then RDTSC itself faulting under EMM386 on this part once the hang was fixed) -- confirmed three independent ways (fixed dinspect, an independent CPUID dump, and PhoenixBIOS's own POST text via the rig's hardware camera) that this is genuinely Intel Pentium OverDrive, ~83MHz. Completes the CPU-tier round (all four CPUs now have a Mach64 datum). See `docs/benchmarks/mach64-215ct-pod83-2026-09-03.md`. |
+| 486DX2-50 | ATI Mach64 215CT/-ET | **CLOSED, 2026-09-04, PASS.** First datum 2026-09-03: 13.685015fps (build `f1f867ccadad`) -- not a clean reference figure, that build carried the mis-staged low-tier `SONG.WAV` under an `AUDIO_TIER=high` compile (see banner above). Round 1 (`...-round1-2026-09-04.md`) validated the pacer-timing (0036) and audio-tier fixes on real hardware: low-tier ~14.79fps (clean), high-tier ~9.9-10.5fps (both stand as measured -- Round 1's own tick-loss theory was floated then refuted by Round 2's RTC witness, no clock-loss correction needed). Round 2 (`...-round2-2026-09-04.md`) validated Phase 2 (device-native audio/0039, 16bpp blowup/0040) but the high tier still failed the KPI by 0.08fps (14.818 vs. 14.90), root-caused to an audio silence-detect throttle cost. Round 3 (`...-round3-2026-09-04.md`) validated the fix (`0041`): **PASS, mean 14.992fps** across two lives, matching the design ceiling and the 486DX2-66's original regime. See `docs/benchmarks/mach64-215ct-486dx2-50-2026-09-03.md` (original datum, corrected in place) and all three round files for the full arc. |
+| Am5x86-133 | ATI Mach64 215CT/-ET | First datum 2026-09-03: 15.016779 fps (build `f1f867ccadad`, pre-merge). **Re-confirmed 2026-09-05 on the merged build (`build_sha12=a5e9835f12e7`), PASS: 14.966555 fps** -- but landed on the "one second over" (299s) shape, unlike this CPU's own clean ViRGE/Cirrus results. Hit and recovered from a real stale-UVCONFIG video hazard (physical OUT OF RANGE) mid-session first. See `docs/benchmarks/mach64-215ct-am5x86-2026-09-03.md` (original) and `docs/benchmarks/mach64-215ct-am5x86-2026-09-05.md` (merged-build re-confirmation and the revised "one second over" finding). |
+| Pentium OverDrive 83 | ATI Mach64 215CT/-ET | First datum 2026-09-03: 14.966555 fps (build `f1f867ccadad`, pre-merge). **CPU identity RESOLVED**: two real dinspect bugs (an unbounded TSC-calibration hang leaving a stale Am5x86-era report behind, then RDTSC itself faulting under EMM386 on this part once the hang was fixed) -- confirmed three independent ways (fixed dinspect, an independent CPUID dump, and PhoenixBIOS's own POST text via the rig's hardware camera) that this is genuinely Intel Pentium OverDrive, ~83MHz. **Re-confirmed 2026-09-05 on the merged build (`build_sha12=a5e9835f12e7`), PASS: 15.016779 fps** -- the clean 298s signature this time, unlike the Am5x86-133+Mach64 leg the day before (299s) despite POD83 being the faster CPU; same `fps_p95` (14.96) as that leg, consistent with boundary-adjacent jitter rather than a fixed per-tier outcome. Closes the last CPU/card pairing that was exclusively pre-merge -- except Mach64+486DX2-66, see the correction below. See `docs/benchmarks/mach64-215ct-pod83-2026-09-03.md` (original) and `docs/benchmarks/mach64-215ct-pod83-2026-09-05.md` (merged-build re-confirmation). |
+
+### ViRGE CPU-tier expansion (CLOSED, 2026-09-04)
+
+Same roster and same outer-loop-card/inner-loop-CPU structure as the
+Mach64 sweep above (`docs/rig-runbook.md` section 2a). All four cells
+run the same day, directly on the merged fix build (`2881cfc`) -- no
+fix-validation arc needed here, that already happened on Mach64. **All
+four CPU tiers now have a ViRGE datum; every one PASSED, and every one
+that had enough pacer slack (all but 486DX2-50, which still PASSED
+comfortably) landed on the exact same 15.016779fps/4475-frame
+signature** -- five independent CPU/card combinations now confirm this
+is the design's deterministic ceiling-hit figure for an uninterrupted
+natural life, not coincidence. Nothing left queued for ViRGE.
+
+| CPU | Card | State |
+|---|---|---|
+| 486DX2-66 | S3 ViRGE 86C375 | **Re-confirmed 2026-09-04, PASS: 15.016779 fps** on the merged-fix build (`build_sha12=a5e9835f12e7`) -- see the 486DX2-66 matrix, above, and `docs/benchmarks/virge-86c375-486dx2-66-2026-09-04.md`. Listed here too since it's now been run on the same current build as the rest of this table, not just the original 486DX2-66 sweep. |
+| 486DX2-50 | S3 ViRGE 86C375 | **DONE, 2026-09-04, PASS: 15.016779 fps** (`build_sha12=a5e9835f12e7`, the merged-fix build -- new pin, supersedes `f1f867ccadad`). Bit-for-bit match to Round 3's Mach64+486DX2-50 G2 life (same frame count, same fps to six decimals, same `fps_p50`/`fps_p95`) -- confirms the audio-tier fix's benefit transfers cleanly to ViRGE's LFB path, closing the exact gap the 486DX2-66 ViRGE leg's own Notes flagged as untested. See `docs/benchmarks/virge-86c375-486dx2-50-2026-09-04.md`. |
+| Am5x86-133 | S3 ViRGE 86C375 | **DONE, 2026-09-04, PASS: 15.016779 fps** (`build_sha12=a5e9835f12e7`). Fourth appearance of the exact same fps/frame-count signature seen on both 486DX2-tier ViRGE legs today and the original Am5x86-133+Mach64 datum -- reads as the pacer's deterministic ceiling-hit signature, not coincidence. CPU identity (AMD Am5x86, ~133MHz, FPU YES) confirmed clean on the fixed `dinspect` build, no repeat of the original ~100MHz/FPU:no misread. See `docs/benchmarks/virge-86c375-am5x86-2026-09-04.md`. |
+| Pentium OverDrive 83 | S3 ViRGE 86C375 | **DONE, 2026-09-04, PASS: 15.016779 fps** (`build_sha12=a5e9835f12e7`). Fifth appearance of the exact same fps/frame-count signature seen on every other pacer-slack-having CPU this sweep -- now fully established, not just suggestive. `fps_p95=14.97`, completing a monotonic progression with CPU speed across the whole sweep. RDTSC/EMM386 hazard from the original POD83 leg re-checked and did not recur. **Closes the ViRGE CPU-tier sweep: all four CPU tiers now have a ViRGE datum.** See `docs/benchmarks/virge-86c375-pod83-2026-09-04.md`. |
+
+### Cirrus CPU-tier expansion (CLOSED, 2026-09-05)
+
+Same structure as the Mach64/ViRGE sweeps. Cirrus previously had only a
+486DX2-66 datum, and it predates the merge
+(`docs/benchmarks/cirrus-cl-gd5434-2026-09-02.md`,
+`...-f1f867ccadad.md`). First cell run directly on the merged fix build
+-- a full card swap (ViRGE -> Cirrus) combined with a CPU swap
+(Am5x86-133 -> POD83) in one operator action, so this also hit (and
+recovered from) the same UVCONFIG-not-yet-run gap the original ViRGE
+swap did. **All four CPU tiers now have a Cirrus datum; every one
+PASSED.** Unlike the ViRGE sweep, the fps/frame-count signature was
+NOT uniform: the two 486DX2 tiers (50, 66) both land one second over
+the ideal life duration (299s/14.966555fps, reproduced across three
+lives total), while the two faster tiers (Am5x86-133, POD83) both land
+on the usual 298s/15.016779fps figure. Does not threaten the KPI at
+any tier. Nothing left queued for Cirrus.
+
+**Revised, 2026-09-05, same day: this is not actually a "CPU-tier
+boundary in Cirrus's banked-path cost."** The paragraph above (and the
+Am5x86-133 row's original text below) read the split as clean and
+tier-determined. The very next cell run afterward --
+Mach64+Am5x86-133 on the merged build,
+`docs/benchmarks/mach64-215ct-am5x86-2026-09-05.md` -- showed the same
+"one second over" effect on Mach64 at this exact CPU tier, which had
+been clean on both Cirrus and ViRGE. A boundary that isn't fixed to
+CPU tier isn't a CPU-tier boundary. See that file's Notes for the
+revised picture (framebuffer byte count and/or per-life timing jitter
+near the rounding threshold, neither confirmed via instrumentation) and
+the Mach64 CPU-tier expansion section for the correction in context.
+
+| CPU | Card | State |
+|---|---|---|
+| 486DX2-50 | Cirrus CL-GD5434 | **DONE, 2026-09-05, PASS: 14.966555 fps** (`build_sha12=a5e9835f12e7`), clearing the 14.90fps KPI line with real margin. Same 299s/4475-frame shape as the 486DX2-66+Cirrus leg, exactly -- the banked-path effect did NOT get worse at this tighter-margin CPU as feared going in; it's identical in magnitude at both tiers, which argues against a pure CPU-cycle-cost mechanism (see that file's Notes). `fps_p95=14.79`, matching ViRGE+486DX2-50's `14.80`. Zero rejected samples, zero critical/warn counts -- none of the original pre-fix pacer/audio-tier signatures reappeared. Completes KPI confirmation on all three cards at the port's minimum-target CPU. See `docs/benchmarks/cirrus-cl-gd5434-486dx2-50-2026-09-05.md`. |
+| 486DX2-66 | Cirrus CL-GD5434 | **Re-confirmed 2026-09-05, PASS: 14.966555 fps** (`build_sha12=a5e9835f12e7`, reproduced identically across two lives). **Breaks the campaign's 15.016779fps/4475-frame signature** -- lands at 299s instead of 298s (same frame count), the first pacer-slack-having CPU/card combination to do so. Working explanation: Cirrus's banked-path overhead, easily absorbed by faster CPUs (POD83), apparently tips 486DX2-66's tighter margin over the integer-second rounding boundary. Small (does not threaten the KPI), real (reproduced twice), not yet root-caused via dedicated instrumentation. See `docs/benchmarks/cirrus-cl-gd5434-486dx2-66-2026-09-05.md`. |
+| Am5x86-133 | Cirrus CL-GD5434 | **DONE, 2026-09-05, PASS: 15.016779 fps** (`build_sha12=a5e9835f12e7`). Back to the usual 298s/4475-frame ceiling-hit signature, NOT the "one second over" pattern the two 486DX2 tiers showed. `fps_p95=14.96`, no measurable video-path penalty at this tier *on Cirrus specifically*. **Correction, same day**: this was read at the time as confirming a clean CPU-tier boundary -- wrong, this same CPU tier shows the effect on Mach64 (see above and `docs/benchmarks/mach64-215ct-am5x86-2026-09-05.md`), so it isn't tier-determined after all. **Closes the Cirrus CPU-tier sweep: all four CPU tiers now have a Cirrus datum.** See `docs/benchmarks/cirrus-cl-gd5434-am5x86-2026-09-05.md`. |
+| Pentium OverDrive 83 | Cirrus CL-GD5434 | **DONE, 2026-09-04, PASS: 15.016779 fps** (`build_sha12=a5e9835f12e7`). Sixth appearance of the campaign's fps/frame-count signature, and the first on a banked (not LFB) card. **Correction, 2026-09-05**: this was read at the time as proving the signature video-path-independent -- wrong, see the 486DX2-66 row above and `docs/benchmarks/cirrus-cl-gd5434-pod83-2026-09-04.md`'s own correction note. `fps_p95=14.96`, consistent with the ViRGE+POD83 leg's `14.97` (card doesn't move `fps_p95`, only CPU tier does -- that part of the finding still holds). See `docs/benchmarks/cirrus-cl-gd5434-pod83-2026-09-04.md`. |
 
 ### Mach64 gate -- do this before treating any Mach64 number as a datum
 
@@ -501,13 +813,57 @@ the root cause, and it sat unrecognised in a log for hours.
   exact check, corrected per this project's own discipline rather than
   left stale.) Reproduces in complete isolation (`tests/probes/pacesim.c`, no SDL, no
   rendering, no audio, no engine) -- rules out anything full-game-
-  specific. **Fix implemented, DOSBox-X-confirmed, not yet on `main` or
-  real-hardware-validated**: `patches/passage/0036`, committed `60ad807`
+  specific. **Fix implemented, DOSBox-X-confirmed, real-hardware-confirmed,
+  and merged to `main` 2026-09-04 as `2881cfc`**: `patches/passage/0036`,
+  originally committed `60ad807`
   on branch `dx2-50-15fps` (isolated worktree
   `/home/claude/git/dossage-dx2-50`), re-bases the capture onto
   `SDL_GetTicksNS()` -- the pacer's own clock -- instead of
   `gettimeofday()`. DOSBox-X smoke (correctness only) across three builds
   shows `fps_p50` collapsed from `16.67` to exactly `15.00` (the design
-  ceiling), `fps_p95` now `14.77-14.83`, reject rates 0-1/4475. Pending
-  Round 1: the physical CPU swapped back to 486DX2-50 and real-hardware
-  confirmation.
+  ceiling), `fps_p95` now `14.77-14.83`, reject rates 0-1/4475.
+
+  **Round 1, real hardware, 2026-09-04: CONFIRMED.** 486DX2-50 + Mach64,
+  five lives across three staged builds (high-tier audio, low-tier
+  audio, and a per-stage-cost diagnostic build, all carrying patch 0036).
+  Percentiles now vary meaningfully per life instead of the fixed
+  `16.67`/`9.09` artifact seen on every pre-fix run this campaign; reject
+  rates 0 across every life; low-tier `fps_p50=15.00` lands exactly on
+  the design ceiling as predicted. Full result, and the audio-tier fix's
+  own real-hardware confirmation (see banner above): `docs/benchmarks/
+  mach64-215ct-486dx2-50-round1-2026-09-04.md`.
+
+  **Round 1 raised a tick-loss theory; Round 2 REFUTED it, 2026-09-04
+  -- corrected here, not left standing.** Round 1 saw 80-166s unexplained
+  launch-to-title wall-clock gaps on high-tier-audio runs only, ruled out
+  WAV disk-load time as the cause (a timed `COPY` of both WAV files), and
+  hypothesized sustained high-tier-audio load was making the BIOS/PIT
+  tick lose ticks -- which would inflate every in-game clock
+  (`gettimeofday()`, `uclock()`, `SDL_GetTicksNS()`) together, since all
+  derive from that same tick. **Round 2's dedicated diagnostic build
+  (`build/stage-D2`) added an in-game CMOS RTC witness -- an independent
+  32.768kHz-crystal clock, not derived from the BIOS/PIT tick -- and
+  measured zero loss**: `"RTC elapsed = 304s (engine time(NULL) = 304s;
+  engine clock gained 0.0%)"` for a full real life. **There is no clock
+  loss on this rig.** The wall-clock gaps are now understood to be
+  ordinary startup/title-wait variability instead (the title screen
+  waits for a key or joystick event to start the first life, and a
+  floating gameport -- "Found 1 joysticks" in every run -- can deliver a
+  spurious button event at an unpredictable moment). Round 1's high-tier
+  fps figures (~9.9-10.5fps reported) stand as measured, not as upper
+  bounds. Full reasoning and the RTC witness's exact output:
+  `docs/benchmarks/mach64-215ct-486dx2-50-round2-2026-09-04.md`.
+
+  **Round 2 also located the true, small remaining source of Round 1's
+  ~5.7s-per-life shortfall against the 298.3s ideal 15fps life**: three
+  ~20s windows per life (starting at the song's loop points, song length
+  136s) show the audio pipeline's silence-detect throttle (shared-layer
+  `SDL_HINT_DOS_SILENCE_DETECT`, doskutsu's `SDL/0054`) sleeping 10ms per
+  pump call during quiet passages where nothing is written to the ring
+  -- a real, if small, per-frame cost during those windows only. Fix is
+  a one-line game-side hint (`SDL_HINT_DOS_SILENCE_DETECT=0`) before
+  `SDL_Init`, landed as `patches/passage/0041`. **Round 3 validated it,
+  2026-09-04: KPI PASS, mean 14.992fps -- see the "GATE CLOSED" table
+  earlier in this document and
+  `docs/benchmarks/mach64-215ct-486dx2-50-round3-2026-09-04.md`.** Merged
+  to `main` with the rest of the arc as `2881cfc`.

@@ -264,23 +264,58 @@ evidence the real dossage `SDL_Delay(0)` delivers ~68ms on average; that
 would need checking against actual in-game RUNMANIFEST data, which this
 investigation did not do.
 
-**Fix implemented and DOSBox-X-confirmed, not yet on `main` or
-real-hardware-validated.** `patches/passage/0036-dos-runmanifest-paced-
-period-on-sdl-clock.patch` -- switches patch 0035's RUNMANIFEST capture
-to `SDL_GetTicksNS()` (the pacer's own clock) instead of
-`gettimeofday()`, exactly the fix direction above. Authored by the
-`15fps` session as Phase 0 of a separate DX2-50 investigation, committed
-`60ad807` on branch `dx2-50-15fps` in an isolated worktree
+**Fix implemented, DOSBox-X-confirmed, real-hardware-confirmed
+(2026-09-04), and merged to `main` the same day as `2881cfc`.**
+`patches/passage/0036-dos-
+runmanifest-paced-period-on-sdl-clock.patch` -- switches patch 0035's
+RUNMANIFEST capture to `SDL_GetTicksNS()` (the pacer's own clock)
+instead of `gettimeofday()`, exactly the fix direction above. Authored by
+the `15fps` session as Phase 0 of a separate DX2-50 investigation,
+committed `60ad807` on branch `dx2-50-15fps` in an isolated worktree
 (`/home/claude/git/dossage-dx2-50`), independently verified present by
 this session (commit, patch files, and build manifest all checked
 directly). DOSBox-X smoke (correctness only, not a performance claim)
 across three builds shows `fps_p50` collapsed from `16.67` to exactly
 `15.00` -- landing right at the design ceiling, as this fix predicts --
 with `fps_p95` now `14.77-14.83` and reject rates at 0-1 samples out of
-4475, a dramatic change from every pre-0036 run's `16.67`/`9.09`. Not
-yet merged to this repo's `main`, and not yet run on real hardware --
-that's Round 1 of the DX2-50 plan, pending the physical CPU swap back to
-486DX2-50 and the `15fps` session's own user's go-ahead.
+4475, a dramatic change from every pre-0036 run's `16.67`/`9.09`.
+
+**Round 1, real hardware, 2026-09-04: CONFIRMED.** 486DX2-50 + Mach64,
+five lives across three staged builds. Percentiles vary meaningfully per
+life (no longer the fixed `16.67`/`9.09` artifact), reject rates 0 across
+every life, low-tier `fps_p50=15.00` lands exactly on the design ceiling.
+Full result: `docs/benchmarks/mach64-215ct-486dx2-50-round1-2026-09-04.md`.
+Merged to this repo's `main` 2026-09-04 as `2881cfc`, along with the rest
+of the DX2-50 fix-validation arc (Rounds 2-3, below).
+
+**Round 1 raised a tick-loss hazard theory; Round 2 REFUTED it,
+2026-09-04 -- corrected here rather than left standing.** Round 1
+observed large, audio-tier-specific launch-to-title wall-clock gaps and,
+having ruled out WAV disk-load time as the explanation, hypothesized
+that sustained high-tier-audio load was causing the underlying BIOS/PIT
+tick to lose ticks -- which would have inflated every in-game clock
+together (since `gettimeofday()`, `time(NULL)`, and patch 0036's own
+`SDL_GetTicksNS()` capture all ultimately derive from that same tick
+source) in a way neither DOS-native clock could catch against the other.
+**Round 2's dedicated diagnostic build (`build/stage-D2`, patch series
++ a new in-game CMOS RTC witness -- an independent 32.768kHz-crystal
+clock, not derived from the BIOS/PIT tick at all) directly measured
+this and found no loss**: `"RTC elapsed = 304 s (engine time(NULL) =
+304 s; engine clock gained 0.0%)"` for a full real life -- the two
+clocks agree to the second. **There is no clock loss on this rig; the
+"audio load loses BIOS ticks" claim from Round 1 is struck.** The large
+wall-clock gaps Round 1 saw are now understood to be ordinary
+launch-to-title *startup and title-wait* variability (the title screen
+only starts the first life on a key or joystick event, and "Found 1
+joysticks" appears in every run's `STDOUT.TXT` -- a floating gameport
+can deliver a spurious button event at an unpredictable moment), not
+measurement error. Round 1's high-tier fps figures (~9.9-10.5fps) stand
+as measured, not as upper bounds. The flattering-direction hazard this
+file documents in the abstract (a clock that can lose time in a way
+that makes a bad result look good) remains a valid general principle
+worth watching for -- it is simply not what happened here. Full
+reasoning and the RTC witness's exact output:
+`docs/benchmarks/mach64-215ct-486dx2-50-round2-2026-09-04.md`.
 
 ## Suggested actions, in priority order (cheapest/highest-value first) -- historical, see RESOLVED above
 
