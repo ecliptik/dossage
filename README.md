@@ -48,7 +48,7 @@ methodology: [docs/BENCHMARK-PLAN.md](docs/BENCHMARK-PLAN.md).
 
 ## Game Assets
 
-**DOSSAGE ships its own game data.** Passage's engine *and* its graphics/music assets were placed in the public domain by Jason Rohrer himself -- see [Components and License](#components-and-license) below -- so there is no separate "supply your own copy" step. The `.tga` graphics and the synthesized music data are vendored alongside the engine source, pinned to the same upstream revision.
+**DOSSAGE ships its own game data.** Passage's engine *and* its graphics/music assets were placed in the public domain by Jason Rohrer. The `.tga` graphics and the synthesized music data are vendored alongside the engine source, pinned to the same upstream revision.
 
 ---
 
