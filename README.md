@@ -39,8 +39,8 @@ everywhere, even on its slowest supported CPU. Audio ships at 22050 Hz
 stereo; a lower-quality 11025 Hz mono tier is also available for
 constrained setups, at no runtime cost either way.
 
-Full benchmark results: [docs/benchmarks/](docs/benchmarks/); methodology:
-[docs/BENCHMARK-PLAN.md](docs/BENCHMARK-PLAN.md).
+Full benchmark results: [docs/benchmarks/](docs/benchmarks/README.md);
+methodology: [docs/BENCHMARK-PLAN.md](docs/BENCHMARK-PLAN.md).
 
 ---
 
