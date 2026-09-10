@@ -23,10 +23,8 @@ DOSSAGE exists for preservation and the engineering challenge of running Passage
 
 ## Status
 
-**Playable and performance-validated across the full range of hardware
-this port targets.** DOSSAGE boots, renders, plays with audio, and
-completes full sessions -- from a 486DX2-50 up through a Pentium
-OverDrive, on three different video cards:
+**Playable and performance-validated on real hardware.** DOSSAGE boots,
+renders, plays with audio, and completes full sessions:
 
 | CPU | ATI Mach64 215CT/-ET | S3 ViRGE 86C375 | Cirrus CL-GD5430/5434 |
 |---|---:|---:|---:|
@@ -39,12 +37,10 @@ Passage's own source caps the game at 15 fps by design, so these numbers
 aren't something to maximize -- they confirm the port holds that ceiling
 everywhere, even on its slowest supported CPU. Audio ships at 22050 Hz
 stereo; a lower-quality 11025 Hz mono tier is also available for
-constrained setups and costs nothing extra at runtime, so there's no
-performance tradeoff either way. Visuals are clean on every card and CPU
-tested.
+constrained setups, at no runtime cost either way.
 
-Minimum and recommended target CPU is 486DX2-50. Full methodology and
-per-machine results: `docs/BENCHMARK-PLAN.md`.
+Minimum and recommended target CPU is 486DX2-50. Methodology:
+`docs/BENCHMARK-PLAN.md`; full per-machine logs: `docs/benchmarks/`.
 
 ---
 
