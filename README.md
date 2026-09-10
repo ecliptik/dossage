@@ -35,10 +35,8 @@ renders, plays with audio, and completes full sessions:
 | 486DX2-66 | 15.02 fps | 15.02 fps | 14.97 fps |
 | 486DX2-50 | 14.99 fps | 15.02 fps | 14.97 fps |
 
-Passage's own source caps the game at 15 fps by design, so these numbers
-aren't something to maximize -- they confirm the port holds that ceiling
-everywhere, even on its slowest supported CPU. Audio ships at 22050 Hz
-stereo; a lower-quality 11025 Hz mono tier is also available for
+Passage's own source caps the game at 15 fps by design. Audio ships at
+22050 Hz stereo; a lower-quality 11025 Hz mono tier is also available for
 constrained setups, at no runtime cost either way.
 
 Full benchmark results: [docs/benchmarks/](docs/benchmarks/README.md);
