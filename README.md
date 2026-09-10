@@ -1,7 +1,7 @@
 # DOSSAGE
 
 <p align="center">
-<a href="#status">Status</a> | <a href="#game-assets">Game Assets</a> | <a href="#requirements">Requirements</a> | <a href="#quickstart">Quickstart</a> | <a href="#video-cards">Video Cards</a> | <a href="#how-this-project-is-developed">How It's Developed</a> | <a href="#components-and-license">Components and License</a>
+<a href="#status">Status</a> | <a href="#game-assets">Game Assets</a> | <a href="#download">Download</a> | <a href="#requirements">Requirements</a> | <a href="#quickstart">Quickstart</a> | <a href="#video-cards">Video Cards</a> | <a href="#how-this-project-is-developed">How It's Developed</a> | <a href="#components-and-license">Components and License</a>
 </p>
 
 DOSSAGE is a port of Jason Rohrer's [Passage](https://hcsoftware.sourceforge.net/passage/) (2007) to MS-DOS on retro 486/Pentium-class hardware. It plays Rohrer's five-minute memento-mori game on real 1990s-era PCs via [SDL3](https://www.libsdl.org/)'s [DOS backend](https://github.com/libsdl-org/SDL/pull/15377), [DJGPP](https://www.delorie.com/djgpp/), and [CWSDPMI](https://en.wikipedia.org/wiki/DOS_Protected_Mode_Interface).
@@ -49,6 +49,16 @@ methodology: [docs/BENCHMARK-PLAN.md](docs/BENCHMARK-PLAN.md).
 ## Game Assets
 
 **DOSSAGE ships its own game data.** Passage's engine *and* its graphics/music assets were placed in the public domain by Jason Rohrer himself -- see [Components and License](#components-and-license) below -- so there is no separate "supply your own copy" step. The `.tga` graphics and the synthesized music data are vendored alongside the engine source, pinned to the same upstream revision.
+
+---
+
+## Download
+
+See [Releases](https://forgejo.ecliptik.com/ecliptik/dossage/releases) for pre-built binaries (also mirrored on [GitHub](https://github.com/ecliptik/dossage/releases)), or build from source (see [Quickstart](#quickstart)).
+
+**Latest release:** [`dossage.zip`](https://forgejo.ecliptik.com/ecliptik/dossage/releases/download/v1.0.0/dossage.zip) (v1.0.0)
+
+Contains `DOSSAGE.EXE`, the `CWSDPMI.EXE` DPMI host, license texts, and the complete game -- see [Game Assets](#game-assets) above.
 
 ---
 
