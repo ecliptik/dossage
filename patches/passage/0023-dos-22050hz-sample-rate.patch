@@ -1,0 +1,96 @@
+From 3032e84c7c1e790f9e0bab7b790b7304bb123466 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 18:32:33 -0700
+Subject: [PATCH] dos: bump music sample rate to 22050Hz
+
+Direct user listening on the mono-audio round (patch 0022) confirmed
+it: "music sounds much better, quality is obviously a bit off, but
+better" -- real, working, but genuinely lower-fidelity than desired.
+Asked whether 22050Hz (halfway between the current 11025Hz and
+Passage's original 44100Hz default) was feasible.
+
+Real-hardware data made this a much easier call than it would have
+been before patch 0022 landed: the mono fix's real-hardware
+confirmation (486DX2-50, PUMPDBG.LOG) showed the audio-pump loop
+dropping to near-zero cost in steady state (avg_iters=0.000000 across
+nearly every 20-frame window, not just "half of ~20-25ms" as
+predicted) -- there's real headroom before doubling the sample rate
+(and therefore the pump loop's per-chunk byte count) becomes a genuine
+fps regression again. Still measuring rather than assuming: this is a
+real, deliberate quality-vs-cost tradeoff, not a free change --
+expected to cost some of the fps mono just bought back, in exchange for
+roughly doubling the audible frequency range mono+11025Hz was limited
+to.
+
+sampleRate 11025 -> 22050 (musicPlayer.cpp global, used both for the
+offline render and to request the physical device's rate via
+SDL_DOSAudioSetDeviceFrameRate() -- so the 44100Hz-floor resample stays
+eliminated regardless of which of the three rates in this port's
+history gets used). Regenerated music/SONG.WAV via the render tool
+(still mono, patch 0022's downmix step unchanged) -- 5,997,600 bytes,
+exactly double the 11025Hz-mono file, and coincidentally the same total
+byte count as the very first 11025Hz-stereo render (same
+duration*rate*channels*bytesPerSample product, sanity-confirms the
+math).
+
+Verified under DOSBox-X: builds; WAV loads and plays without error;
+boots, plays, exits cleanly via ESCAPE, no hang; PUMPDBG.LOG shows the
+same "settles to near-zero after a few startup windows" pattern as the
+mono-at-11025Hz build, mechanism confirmed working -- real magnitude
+(and whether the fps trade is worth it) needs real hardware. As with
+patch 0022, cannot verify actual audible quality/correctness from this
+sandboxed environment -- real-hardware confirmation (fps, PUMPDBG.LOG,
+and a genuine listening judgment on whether 22050Hz sounds
+meaningfully better than 11025Hz to justify whatever fps cost it turns
+out to have) is the actual test.
+---
+ gameSource/musicPlayer.cpp |  32 +++++++++++++++++++-------------
+ 1 file changed, 19 insertions(+), 13 deletions(-)
+
+diff --git a/gameSource/musicPlayer.cpp b/gameSource/musicPlayer.cpp
+index 1efd301..e555767 100644
+--- a/gameSource/musicPlayer.cpp
++++ b/gameSource/musicPlayer.cpp
+@@ -16,20 +16,26 @@
+ #include <math.h>
+ #include <stdlib.h>
+ 
+-// DOS-PORT: 11025Hz, not 22050 (or Passage's original 44100 default).
++// DOS-PORT: 22050Hz, not 11025 (or Passage's original 44100 default).
+ // Real-hardware measurement on the port's minimum-target CPU (486DX2-50)
+-// found the SB PCM device-rate mismatch a major cost: SDL floors the
+-// physical device to 44100Hz by default regardless of what's requested,
+-// forcing a 4x logical->physical resample on every audio-ring pump and
+-// proportionally more real-time-audio-per-pump-call needed at a higher
+-// content rate. doskutsu's own production config (confirmed via their
+-// source, not guessed) deliberately runs its SB16 device at 11025Hz
+-// specifically because each pumped chunk then covers ~4x more real-time
+-// audio than at 44100Hz, needing ~4x fewer pump calls to keep pace with
+-// a frame interval -- combined with SDL_DOSAudioSetDeviceFrameRate()
+-// below (forcing the physical device to actually open at this rate
+-// instead of the 44100 floor), this eliminates the resampler entirely.
+-int sampleRate = 11025;
++// originally found the SB PCM device-rate mismatch a major cost: SDL
++// floors the physical device to 44100Hz by default regardless of what's
++// requested, forcing a 4x logical->physical resample on every audio-ring
++// pump and proportionally more real-time-audio-per-pump-call needed at a
++// higher content rate. 11025Hz (doskutsu's own production rate, avoiding
++// that resample entirely via SDL_DOSAudioSetDeviceFrameRate() below)
++// fixed the fps regression but was later judged too low-fidelity by
++// direct listening (2026-08-27, after mono playback -- patches 0007-
++// 0009/0022 -- was confirmed a real fps win with acceptable quality).
++// 22050Hz is a real, deliberate quality-vs-cost tradeoff, not a default
++// worth assuming either way: it doubles the audio-pump loop's per-frame
++// byte count for the same real-time duration versus 11025Hz (roughly
++// doubling its measured cost, unconfirmed until the next real-hardware
++// round), while halving Nyquist-limited fidelity loss versus 44100Hz.
++// Still forces the physical device to open at this exact rate via
++// SDL_DOSAudioSetDeviceFrameRate() below, so the 44100-floor resample
++// stays eliminated regardless of which of these three rates is chosen.
++int sampleRate = 22050;
+ 
+ 
+ 
+-- 
+2.47.3
+

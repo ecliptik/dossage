@@ -1,0 +1,76 @@
+From 4318314026d9fb11409a23a41ad59855a2c6f9dc Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 18:48:50 -0700
+Subject: [PATCH] dos: revert music sample rate back to 11025Hz
+
+Real-hardware confirmation of patch 0023 (22050Hz): fps 10.58 -> 9.45
+on the 486DX2-50 -- matches the user's own direct-listening report of
+"occasional stutter" at 22050Hz exactly. PUMPDBG.LOG confirmed the
+mechanism: the pump loop's iteration count no longer settles to zero
+in steady state (stays in the 1.3-3.6 range the whole session,
+~3-27ms/window) the way it did at 11025Hz, where it was essentially
+free.
+
+Reverting to 11025Hz as the working default while the 486DX2-50 is
+still in the test rig, ahead of the planned per-tier build option
+(22050Hz stereo for higher-end targets, 11025Hz mono for the minimum-
+spec 486DX2-50 -- not implemented yet, still a single hardcoded
+global) and the planned multi-CPU benchmark sweep (Pentium OverDrive
+83, AMD 5x86 133, 486DX2-66, 486DX2-50, multiple video cards) that
+will determine where that tier line actually falls. This round
+specifically isolates the drawScore() fix (see the next patch) against
+the best-known 486DX2-50 configuration, rather than conflating two
+changes in one measurement.
+
+Regenerated music/SONG.WAV via the render tool: 2,998,800 bytes,
+confirmed byte-identical to the earlier 11025Hz-mono render (same
+sha256 as before the 22050Hz detour).
+---
+ gameSource/musicPlayer.cpp |  31 +++++++++++--------------------
+ 1 file changed, 11 insertions(+), 20 deletions(-)
+
+diff --git a/gameSource/musicPlayer.cpp b/gameSource/musicPlayer.cpp
+index e555767..d314813 100644
+--- a/gameSource/musicPlayer.cpp
++++ b/gameSource/musicPlayer.cpp
+@@ -16,26 +16,17 @@
+ #include <math.h>
+ #include <stdlib.h>
+ 
+-// DOS-PORT: 22050Hz, not 11025 (or Passage's original 44100 default).
+-// Real-hardware measurement on the port's minimum-target CPU (486DX2-50)
+-// originally found the SB PCM device-rate mismatch a major cost: SDL
+-// floors the physical device to 44100Hz by default regardless of what's
+-// requested, forcing a 4x logical->physical resample on every audio-ring
+-// pump and proportionally more real-time-audio-per-pump-call needed at a
+-// higher content rate. 11025Hz (doskutsu's own production rate, avoiding
+-// that resample entirely via SDL_DOSAudioSetDeviceFrameRate() below)
+-// fixed the fps regression but was later judged too low-fidelity by
+-// direct listening (2026-08-27, after mono playback -- patches 0007-
+-// 0009/0022 -- was confirmed a real fps win with acceptable quality).
+-// 22050Hz is a real, deliberate quality-vs-cost tradeoff, not a default
+-// worth assuming either way: it doubles the audio-pump loop's per-frame
+-// byte count for the same real-time duration versus 11025Hz (roughly
+-// doubling its measured cost, unconfirmed until the next real-hardware
+-// round), while halving Nyquist-limited fidelity loss versus 44100Hz.
+-// Still forces the physical device to open at this exact rate via
+-// SDL_DOSAudioSetDeviceFrameRate() below, so the 44100-floor resample
+-// stays eliminated regardless of which of these three rates is chosen.
+-int sampleRate = 22050;
++// DOS-PORT: back to 11025Hz for this round -- real-hardware measurement
++// confirmed 22050Hz costs real fps (10.58 -> 9.45 on the 486DX2-50,
++// matching the user's own "occasional stutter" listening report), and
++// this round is specifically testing the drawScore() fix against the
++// best-known 486DX2-50 config (11025Hz mono) while that exact CPU is
++// still in the rig, ahead of a planned multi-tier build option
++// (this rate is one tier's default) and a full hardware-matrix
++// benchmark sweep -- neither implemented yet, this is still a single
++// hardcoded global. See the git history on this line for the full
++// 11025/22050/44100 tradeoff writeup.
++int sampleRate = 11025;
+ 
+ 
+ 
+-- 
+2.47.3
+

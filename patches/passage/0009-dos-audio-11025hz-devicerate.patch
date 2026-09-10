@@ -1,0 +1,95 @@
+From ef4d255ae6436fab9d772e005ce95e5ef99f77c4 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 27 Aug 2026 13:30:43 -0700
+Subject: [PATCH] dos: run the audio device at 11025Hz, not 22050/44100
+
+Prompted by dosskutsu's own source-verified answer to the question
+"how does your engine avoid the per-frame audio-pump cost dossage is
+hitting on the real 486DX2-50" -- their raw-PCM path deliberately runs
+the SB16 device at 11025Hz specifically because each pumped chunk then
+covers ~4x more real-time audio than at 44100Hz (needing ~4x fewer
+pump calls to keep pace with a frame interval), combined with avoiding
+SDL core's "floor every physical device to 44100Hz" policy, which
+otherwise forces a 4x logical->physical resample on every pumped
+chunk regardless of what the app requests.
+
+Two changes: (1) sampleRate dropped from 22050 to 11025 (also halves
+SONG.WAV, ~5.7MB instead of ~11.4MB -- re-rendered via `make
+render-music`); (2) SDL_DOSAudioSetDeviceFrameRate(sampleRate) called
+before SDL_OpenAudioDeviceStream, using the shared backend's own
+documented setter for exactly this purpose (SDL/0090) -- without it,
+audioFormat.freq alone is just a request SDL's core is explicitly
+licensed to override, and does (to 44100).
+
+Verified under DOSBox-X: SDLDBG.LOG confirms "device-rate setter
+default: 44100 -> 11025 Hz ... resampler collapses to channel-dup",
+audio still converges to fully non-silent per SILENCE_HISTO. Real-
+hardware re-verification of both fps and audio quality on the
+486DX2-50 is the next step -- this is proposed as addressing the
+actual mechanism dosskutsu identified, not another blind parameter
+tweak.
+---
+ gameSource/musicPlayer.cpp |  33 ++++++++++++++++++++++++++++++---
+ 1 file changed, 30 insertions(+), 3 deletions(-)
+
+diff --git a/gameSource/musicPlayer.cpp b/gameSource/musicPlayer.cpp
+index 0ecf001..dd39cbd 100644
+--- a/gameSource/musicPlayer.cpp
++++ b/gameSource/musicPlayer.cpp
+@@ -9,11 +9,27 @@
+ 
+ #include <SDL3/SDL.h>
+ 
++#ifdef __DJGPP__
++#include <SDL3/SDL_dosaudio_devicerate.h>
++#endif
++
+ #include <math.h>
+ #include <stdlib.h>
+ 
+-int sampleRate = 22050;
+-//int sampleRate = 11025;
++// DOS-PORT: 11025Hz, not 22050 (or Passage's original 44100 default).
++// Real-hardware measurement on the port's minimum-target CPU (486DX2-50)
++// found the SB PCM device-rate mismatch a major cost: SDL floors the
++// physical device to 44100Hz by default regardless of what's requested,
++// forcing a 4x logical->physical resample on every audio-ring pump and
++// proportionally more real-time-audio-per-pump-call needed at a higher
++// content rate. doskutsu's own production config (confirmed via their
++// source, not guessed) deliberately runs its SB16 device at 11025Hz
++// specifically because each pumped chunk then covers ~4x more real-time
++// audio than at 44100Hz, needing ~4x fewer pump calls to keep pace with
++// a frame interval -- combined with SDL_DOSAudioSetDeviceFrameRate()
++// below (forcing the physical device to actually open at this rate
++// instead of the 44100 floor), this eliminates the resampler entirely.
++int sampleRate = 11025;
+ 
+ 
+ 
+@@ -684,11 +700,22 @@ void startMusic( const char *inTGAFileName ) {
+ 
+     SDL_AudioSpec audioFormat;
+ 
+-    /* Set 16-bit stereo audio at 22Khz */
++    /* Set 16-bit stereo audio at sampleRate (11025Hz -- see the comment
++       above the global) */
+     audioFormat.freq = sampleRate;
+     audioFormat.format = SDL_AUDIO_S16;
+     audioFormat.channels = 2;
+ 
++#ifdef __DJGPP__
++    // DOS-PORT: request the PHYSICAL device open at sampleRate too, not
++    // just the logical stream -- without this, SDL3's own core floors
++    // the real device to 44100Hz regardless of what audioFormat.freq
++    // above asks for, forcing a resample on every pumped chunk. Must be
++    // called before SDL_OpenAudioDeviceStream (cached, consumed once at
++    // OpenDevice).
++    SDL_DOSAudioSetDeviceFrameRate( sampleRate );
++#endif
++
+     /* DOS-PORT: SDL3 opens a device+callback pair via
+        SDL_OpenAudioDeviceStream (SDL1.2's samples/callback/userdata
+        fields moved out of SDL_AudioSpec and into this call's own
+-- 
+2.47.3
+
