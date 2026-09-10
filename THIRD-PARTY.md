@@ -12,8 +12,8 @@ vendors, or ships. Kept in sync with `vendor/sources.manifest`.
 | [Passage](https://github.com/jasonrohrer/Passage) | `master` @ `2f713f2` | **public domain** | Yes (statically linked + data) | The game itself, by Jason Rohrer (2007) |
 | [minorGems](https://github.com/jasonrohrer/minorGems) (subset) | `master` @ `ef42b1c` | **public domain** | Yes (statically linked) | File/path, string, settings, time, thread, sha1, TGA-decode utility subset |
 | [SDL3](https://github.com/libsdl-org/SDL) | `main` @ `74a7462` (post-[PR #15377](https://github.com/libsdl-org/SDL/pull/15377)) | zlib | Yes (statically linked) | Platform abstraction + DOS backend |
-| [DJGPP libc](https://www.delorie.com/djgpp/) | 2.05+ (via GCC 12.2.0) | **GPL + runtime-library exception** | Yes (statically linked) | C runtime on DOS |
-| [CWSDPMI](https://sandmann.dotster.com/cwsdpmi/) | TBD (not yet vendored) | **freeware, redistribution permitted** | Yes (separate .exe, not linked) | DPMI host |
+| [DJGPP libc](https://www.delorie.com/djgpp/) | 2.05+ (via GCC 12.2.0) | **free to use unmodified** ([FAQ 19.1](https://www.delorie.com/djgpp/v2faq/faq19_1.html)) + **GCC Runtime Library Exception** for linked `libgcc` code | Yes (statically linked) | C runtime on DOS |
+| [CWSDPMI](https://sandmann.dotster.com/cwsdpmi/) | r7 (`vendor/cwsdpmi/`) | **freeware, redistribution permitted** | Yes (separate .exe, not linked) | DPMI host |
 | [DOSBox-X](https://dosbox-x.com/) | system package | GPLv2 | No (dev-only) | Pre-hardware testing emulator |
 
 Note: **neither SDL3_mixer nor SDL3_image is vendored, linked, or
@@ -34,11 +34,16 @@ attribution obligation.
 
 Unlike doskutsu (whose `DOSKUTSU.EXE` is GPLv3 because it statically links
 GPLv3 NXEngine-evo), `DOSSAGE.EXE` links only public-domain (Passage,
-minorGems) and zlib-licensed (SDL3) code, plus DJGPP libc
-(GPL with a runtime-library exception that explicitly permits static
-linking without imposing GPL on the result). There is no GPL-proper
-component in the link line, so nothing forces the combined binary under a
-copyleft license.
+minorGems) and zlib-licensed (SDL3) code, plus DJGPP's C runtime. DJGPP's
+own FAQ states the stock, unmodified library carries no restriction on
+programs compiled with it ([FAQ 19.1](https://www.delorie.com/djgpp/v2faq/faq19_1.html)
+-- restrictions only attach if you modify the library's own sources,
+which this port does not); any `libgcc` support code pulled in by GCC
+itself falls under the separate, correctly-named
+[GCC Runtime Library Exception](https://www.gnu.org/licenses/gcc-exception-3.1.html),
+written for exactly this "distribute a compiled binary" case. There is no
+GPL-proper component in the link line, so nothing forces the combined
+binary under a copyleft license.
 
 ### MIT source, public-domain engine
 
@@ -57,9 +62,10 @@ No conflicts.
 
 Same posture as doskutsu: CWSDPMI is a DPMI host invoked at runtime, not
 linked. Its redistribution terms require bundling `CWSDPMI.DOC` alongside
-the binary. Not yet vendored in this repo -- tracked as a Phase 1/build-
-system task (see `PLAN.md`), following doskutsu's `fetch-vendor-binaries.sh`
-+ `vendor/binaries.manifest` pattern rather than guessing a source/sha now.
+the binary. Vendored via `scripts/fetch-vendor-binaries.sh` +
+`vendor/binaries.manifest`, same pattern as doskutsu; the binary itself
+stays gitignored per that manifest's own convention, `cwsdpmi.doc` (its
+redistribution terms) is tracked.
 
 ### Passage's game data ships with the engine
 
@@ -112,7 +118,7 @@ Cave Story's freeware-but-not-redistributed data in doskutsu. See
 
 ### DJGPP libc
 
-- **License:** GPL with the runtime-library exception
+- **License:** free to use unmodified ([FAQ 19.1](https://www.delorie.com/djgpp/v2faq/faq19_1.html)); linked `libgcc` code separately covered by the [GCC Runtime Library Exception](https://www.gnu.org/licenses/gcc-exception-3.1.html)
 - **Source:** https://www.delorie.com/djgpp/
 - **Role:** C runtime for DJGPP-compiled binaries.
 
@@ -120,7 +126,7 @@ Cave Story's freeware-but-not-redistributed data in doskutsu. See
 
 - **License:** freeware with specific redistribution terms
 - **Source:** https://sandmann.dotster.com/cwsdpmi/
-- **Role:** DPMI host. Not yet vendored -- see "CWSDPMI is separate" above.
+- **Role:** DPMI host. Vendored (`vendor/cwsdpmi/`) -- see "CWSDPMI is separate" above.
 
 ### DOSBox-X
 
@@ -148,8 +154,13 @@ Before cutting a release, verify the dist archive contains:
 - [ ] `CWSDPMI.EXE`
 - [ ] `CWSDPMI.DOC` (CWSDPMI license, required by its terms)
 - [ ] `LICENSE.TXT` (this repo's MIT + public-domain note)
-- [ ] `THIRD-PARTY.TXT` (CRLF-normalized version of this file)
+- [ ] `3RDPARTY.TXT` (CRLF-normalized version of this file -- 8.3-safe
+      name; `THIRD-PARTY.TXT` is 11 characters before the dot, over DOS's
+      8-character limit, same reasoning as doskutsu's own `3RDPARTY.TXT`)
 - [ ] `README.TXT` (user-facing DOS-readable quick-start)
+- [ ] `graphics/`, `music/`, `settings/` -- the game data `make stage`
+      already copies alongside the binary; without these the archive is
+      not a runnable game
 
 The `dist` Makefile target (once it exists) is the source of truth for
 what ends up in the archive. If it diverges from this list, fix the
