@@ -1,0 +1,101 @@
+From e753542deef82cd872dace744feec3e262f881f4 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 10 Sep 2026 09:19:23 -0700
+Subject: [PATCH 1/2] dos: keep quit-time debug prints off the no-scrollback
+ DOS console
+
+Upstream's own "Max world x"/"Min world x" debug prints and this
+port's own frame-time-sample reject-count diagnostic (patch 0034) both
+land on stdout at quit. On a desktop OS that's a separate terminal most
+players never see; on DOS the text console IS the screen the player was
+just playing on, with no scrollback -- real-hardware benchmarking
+already found the very next thing to print (CWSDPMI's own exit-stats
+banner) scrolls the summary off screen entirely (docs/rig-runbook.md).
+Reported directly from a real-hardware playthrough: leftover debug
+text visible at quit.
+
+Two changes: suppress the upstream min/max-world-bounds prints on DOS
+only (DOS-specific UX fix, not a claim they're wrong upstream -- kept
+for other platforms). Move the frame-time reject-count diagnostic from
+a stdout printf into the RUNMANI.LOG file it already writes next to --
+still fully inspectable, no longer duplicated to a screen with nothing
+to scroll it back with. "Frame rate = ..." and "Game time = ..."
+are left exactly as before -- both upstream and the port's own
+documented intended quit summary (README's "Q or ESC quits, printing
+a frame-rate summary").
+---
+ gameSource/game.cpp | 44 +++++++++++++++++++++++++++++---------------
+ 1 file changed, 29 insertions(+), 15 deletions(-)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index eb3835a..f506c70 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -2285,28 +2285,24 @@ char playGame() {
+     unsigned long netTime = time( NULL ) - startTime;
+     double frameRate = frameCount / (double)netTime;
+     
++#ifndef __DJGPP__
++    // DOS-PORT: these two are upstream Rohrer debug prints, harmless on a
++    // desktop OS where stdout is a separate terminal most players never
++    // see. DOS has no such separation -- the text console IS the screen
++    // the player was just playing on, with no scrollback, so raw min/max
++    // world-bounds output reads as unexplained "debug junk" at quit
++    // instead of the intended closing summary. Suppressed on DOS only;
++    // unchanged elsewhere.
+     printf( "Max world x = %f\n", maxWorldX );
+     printf( "Min world x = %f\n", minWorldX );
+-    
+-    printf( "Frame rate = %f fps (%d frames)\n", 
++#endif
++
++    printf( "Frame rate = %f fps (%d frames)\n",
+             frameRate, frameCount );
+ 
+     printf( "Game time = %d:%d\n",
+             (int)netTime / 60, (int)netTime % 60 );
+ 
+-#ifdef __DJGPP__
+-    // DOS-PORT: visible, not silent -- a lopsided reject count is itself
+-    // a finding (see DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S's own comment),
+-    // not something to correct quietly out of the percentile inputs.
+-    printf( "Frame-time samples: %d used, %d rejected non-positive, "
+-            "%d rejected below %.3fs, %d rejected above %.1fs\n",
+-            frameTimeSampleCount, frameTimeRejectedNonPositive,
+-            frameTimeRejectedTooSmall,
+-            (double)DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S,
+-            frameTimeRejectedTooLarge,
+-            (double)DOS_PORT_FRAME_TIME_MAX_PLAUSIBLE_S );
+-#endif
+-
+     fflush( stdout );
+ 
+ #ifdef __DJGPP__
+@@ -2349,6 +2345,24 @@ char playGame() {
+         FILE *runManifestLog = fopen( "RUNMANI.LOG", "a" );
+         if( runManifestLog != NULL ) {
+             runmanifest_emit( runManifestLog, &manifest );
++
++            // DOS-PORT: visible, not silent -- a lopsided reject count is
++            // itself a finding (see DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S's
++            // own comment), not something to correct quietly out of the
++            // percentile inputs. Logged here rather than to stdout: DOS's
++            // text console has no scrollback, so this and the manifest
++            // block above would otherwise clutter a normal player's quit
++            // screen for no benefit -- the file is exactly as inspectable
++            // for anyone actually investigating frame-time health.
++            fprintf( runManifestLog,
++                     "Frame-time samples: %d used, %d rejected non-positive, "
++                     "%d rejected below %.3fs, %d rejected above %.1fs\n",
++                     frameTimeSampleCount, frameTimeRejectedNonPositive,
++                     frameTimeRejectedTooSmall,
++                     (double)DOS_PORT_FRAME_TIME_MIN_PLAUSIBLE_S,
++                     frameTimeRejectedTooLarge,
++                     (double)DOS_PORT_FRAME_TIME_MAX_PLAUSIBLE_S );
++
+             fclose( runManifestLog );
+             }
+         }
+-- 
+2.47.3
+
