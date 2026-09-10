@@ -1,0 +1,183 @@
+From 45d7a041e82ce77c3c8e2444eceb31b7c4e742c6 Mon Sep 17 00:00:00 2001
+From: Micheal Waltz <micheal@ecliptik.com>
+Date: Thu, 10 Sep 2026 09:19:50 -0700
+Subject: [PATCH] dos: prefer 640x480 explicitly on a Mach64-style
+ mode-negotiation miss
+
+Root-caused during the 2026-09 benchmark campaign (docs/BENCHMARK-PLAN.md,
+mach64-215ct-2026-09-03.md): a real-hardware ATI Mach64 launch landed on
+512x384 instead of the requested 320x240, because that card has no
+native 320x240 mode and SDL3's own SDL_GetClosestFullscreenDisplayMode
+tie-breaks same-aspect-ratio candidates (320x240/512x384/640x480 are
+all exactly 4:3) by always keeping the smallest. Visible on camera as
+green dashed banding above the title logo -- leftover VRAM/text-mode
+content in a mode this port had never actually validated before.
+
+The only standing mitigation was an ad hoc "SET SDL_HINT_DOS_FORCE_MODE_ID=
+0x0111" before each manual benchmark launch, never baked into the
+shipped binary -- fine for a controlled benchmark session, not for a
+normal player just running DOSSAGE.EXE. A hardcoded FORCE_MODE_ID can't
+be baked in unconditionally either: Cirrus and ViRGE both have an exact
+320x240 match already and would be actively broken by forcing them onto
+640x480 too.
+
+Fix by enumerating available modes ourselves before creating the
+window: if the exact request isn't there, prefer 640x480 explicitly
+when it's enumerated (the same real-hardware-validated target the ad
+hoc FORCE_MODE_ID workaround used), falling back to a generic
+same-aspect search only if 640x480 itself isn't available. Cards with
+an exact match are untouched -- this block is a no-op for them.
+
+Two real-hardware corrections landed same day (2026-09-10) before this
+version, both worth keeping in the record since DOSBox-X cannot
+exercise this code path at all (its emulated card has an exact 320x240
+match) -- every version had to be found wrong by a real card, not by
+emulation:
+
+1. First version picked the LARGEST same-aspect candidate overall,
+   reasoning that alone was enough to beat the smallest-first tie-break.
+   On this Mach64's UniVBE, which enumerates same-aspect modes all the
+   way up through 1280x1024, that overshot to 1024x768 -- the game's
+   own 320x240-native content then rendered as a small block in the
+   corner of an otherwise-black canvas (confirmed via the rig's room
+   camera and DOSVESA-MODESET's own log line).
+
+2. Second version picked the SMALLEST same-aspect candidate that isn't
+   smaller than requested -- well-reasoned in the abstract, but for a
+   320x240 request on this card, 512x384 IS that smallest candidate,
+   and 512x384 is the ORIGINAL corrupted mode this fix exists to avoid.
+   A generic closest-without-going-under heuristic has no way to know
+   one specific candidate is known-bad; only the real-hardware campaign
+   established that. This version encodes that measurement directly
+   (explicit 640x480 preference) instead of re-deriving a general rule
+   that real hardware kept falsifying.
+
+This is a dossage-local workaround, not a shared-layer fix -- doskutsu
+hits the identical SDL3 tie-break on the identical card and carries the
+same ad hoc-only mitigation (its own docs/internal/BOOT.md). The
+general case (SDL_GetClosestFullscreenDisplayMode's tie-break itself)
+would be worth fixing once in the hub's shared SDL3-DOS layer rather
+than per-port, but that is a separate, cross-port change; this patch
+only unblocks dossage's own real-hardware behavior.
+---
+ gameSource/game.cpp | 104 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 104 insertions(+)
+
+diff --git a/gameSource/game.cpp b/gameSource/game.cpp
+index f506c70..675d108 100644
+--- a/gameSource/game.cpp
++++ b/gameSource/game.cpp
+@@ -621,6 +621,110 @@ void createScreen() {
+     flags = flags | SDL_WINDOW_FULLSCREEN;
+     displayW = screenWidth;
+     displayH = screenHeight;
++
++    // DOS-PORT: work around SDL_GetClosestFullscreenDisplayMode's own
++    // aspect-ratio tie-break (see SDL_HINT_DOS_FORCE_MODE_ID's doc comment
++    // in SDL_hints.h) always keeping the SMALLEST same-aspect candidate
++    // when the exact requested mode isn't enumerated. Real-hardware
++    // finding (2026-09 benchmark campaign, docs/BENCHMARK-PLAN.md): a card
++    // with no native mode matching screenWidth/screenHeight -- e.g. ATI
++    // Mach64, which has no 320x240 -- lands on a smaller same-aspect
++    // fallback (512x384) instead of the intended larger one (640x480),
++    // visible as leftover-VRAM green corruption above the title logo in
++    // that never-before-cleared mode. Cards with an exact match (Cirrus,
++    // ViRGE) hit no tie at all and are untouched by this block.
++    //
++    // Fix: enumerate the actually-available modes ourselves before
++    // creating the window. If the exact request isn't among them,
++    // prefer 640x480 specifically (VESA-standard mode 0x0111) when it's
++    // enumerated -- the exact fallback this port's whole 2026-09
++    // benchmark campaign validated clean on real Mach64 hardware via an
++    // ad hoc SDL_HINT_DOS_FORCE_MODE_ID=0x0111, now baked in instead.
++    // Falls back to a generic search only if 640x480 itself isn't
++    // available -- a safety net for a card this campaign never tested,
++    // not the primary path.
++    //
++    // Real-hardware correction #1 (2026-09-10): an earlier version of
++    // this fix picked the LARGEST same-aspect candidate overall,
++    // reasoning that was enough to beat the smallest-first tie-break.
++    // On a real Mach64 whose UniVBE enumerates all the way up through
++    // 1280x1024, that overshot to 1024x768, and the game's own
++    // 320x240-native content rendered as a small block in the corner
++    // of an otherwise-black canvas.
++    //
++    // Real-hardware correction #2 (2026-09-10, same day): "smallest
++    // same-aspect candidate that isn't smaller than requested" (the
++    // fix that replaced #1) is well-reasoned in the abstract but wrong
++    // on this specific card: for a 320x240 request, 512x384 IS the
++    // smallest same-aspect candidate that isn't smaller -- and 512x384
++    // is the ORIGINAL corrupted mode this whole fix exists to avoid
++    // (docs/BENCHMARK-PLAN.md's "leftover VRAM/text-mode content not
++    // cleared in this never-before-validated mode" finding). A generic
++    // closest-without-going-under heuristic has no way to know that one
++    // specific candidate is known-bad; only real-hardware measurement
++    // established that, so this version encodes that measurement
++    // directly instead of re-deriving a general rule DOSBox-X can't
++    // exercise (its emulated card has an exact 320x240 match, so this
++    // whole block never fires there) and real hardware then falsifies.
++    {
++        int numModes = 0;
++        SDL_DisplayMode **modes = SDL_GetFullscreenDisplayModes(
++            SDL_GetPrimaryDisplay(), &numModes );
++
++        if( modes != NULL ) {
++            bool exactMatch = false;
++            for( int i=0; i<numModes && !exactMatch; i++ ) {
++                if( modes[i]->w == displayW && modes[i]->h == displayH ) {
++                    exactMatch = true;
++                    }
++                }
++
++            if( !exactMatch ) {
++                bool found640 = false;
++                for( int i=0; i<numModes && !found640; i++ ) {
++                    if( modes[i]->w == 640 && modes[i]->h == 480 ) {
++                        found640 = true;
++                        }
++                    }
++
++                int bestW = 0;
++                int bestH = 0;
++
++                if( found640 ) {
++                    bestW = 640;
++                    bestH = 480;
++                    }
++                else {
++                    double targetAspect = (double)displayW / (double)displayH;
++
++                    for( int i=0; i<numModes; i++ ) {
++                        int w = modes[i]->w;
++                        int h = modes[i]->h;
++                        double aspect = (double)w / (double)h;
++
++                        if( fabs( aspect - targetAspect ) < 0.001 &&
++                            w >= displayW && h >= displayH &&
++                            ( bestW == 0 || w * h < bestW * bestH ) ) {
++                            bestW = w;
++                            bestH = h;
++                            }
++                        }
++                    }
++
++                if( bestW > 0 &&
++                    ( bestW != displayW || bestH != displayH ) ) {
++                    printf( "DOS-PORT: no exact %dx%d mode -- using "
++                            "%dx%d instead of the smallest-first "
++                            "tie-break\n",
++                            displayW, displayH, bestW, bestH );
++                    displayW = bestW;
++                    displayH = bestH;
++                    }
++                }
++
++            SDL_free( modes );
++            }
++    }
+ #endif
+ 
+     window = SDL_CreateWindow( "Passage", displayW, displayH, flags );
+-- 
+2.47.3
+
