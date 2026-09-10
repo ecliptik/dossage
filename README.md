@@ -39,9 +39,8 @@ everywhere, even on its slowest supported CPU. Audio ships at 22050 Hz
 stereo; a lower-quality 11025 Hz mono tier is also available for
 constrained setups, at no runtime cost either way.
 
-Minimum and recommended target CPU is 486DX2-50. Methodology:
-[docs/BENCHMARK-PLAN.md](docs/BENCHMARK-PLAN.md); full per-machine logs:
-[docs/benchmarks/](docs/benchmarks/).
+Full benchmark results: [docs/benchmarks/](docs/benchmarks/); methodology:
+[docs/BENCHMARK-PLAN.md](docs/BENCHMARK-PLAN.md).
 
 ---
 
