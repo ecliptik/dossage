@@ -16,7 +16,7 @@ This project was 100% built agentically using [Claude Code](https://claude.com/c
 
 | | |
 |:---:|:---:|
-| <img src="docs/screenshots/dossage-title.png" alt="DOSSAGE title screen running in DOSBox-X" width="100%"> | <img src="docs/screenshots/dossage-gameplay.png" alt="Passage gameplay -- maze corridor, player sprite, treasure chests -- running in DOSBox-X" width="100%"> |
+| <img src="docs/screenshots/dossage-title.png" alt="DOSSAGE title screen running in DOSBox-X" width="320"> | <img src="docs/screenshots/dossage-gameplay.png" alt="Passage gameplay -- maze corridor, player sprite, treasure chests -- running in DOSBox-X" width="320"> |
 | **Title Screen** | **Gameplay** |
 
 <p align="center">captures from DOSBox-X running <code>DOSSAGE.EXE</code></p>
