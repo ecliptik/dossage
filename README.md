@@ -19,32 +19,42 @@ DOSSAGE exists for preservation and the engineering challenge of running Passage
 
 ## Status
 
-**PLAYABLE and real-hardware validated.** DOSSAGE boots, renders, plays with
-audio, and completes full sessions on period hardware. Measured on a
-486DX2-66 / 48 MB / PicoGUS (SB mode) / Cirrus CL-GD5430 rig:
+**OPTIMIZING -- the 15 fps KPI is closed across the full real-hardware
+matrix.** DOSSAGE boots, renders, plays with audio, and completes full
+sessions on period hardware. A dedicated fix-validation campaign
+(`patches/passage/0036`, `0038`-`0041`) closed the 486DX2-50 leg -- this
+port's own minimum-target CPU -- and a follow-on 3-card x 4-CPU sweep
+confirmed every pairing on the merged build (`build_sha12=a5e9835f12e7`):
 
-| | |
-|---|---|
-| **Frame rate** | **14.94 fps** sustained (from 13.99 before the frame-pacer work) |
-| Steady-state | 14.9989 fps |
-| Audio | working (11025 Hz mono, `AUDIO_TIER=low`) |
-| Visual | clean, no corruption across multi-minute runs |
+| CPU | ATI Mach64 215CT/-ET | S3 ViRGE 86C375 | Cirrus CL-GD5430/5434 |
+|---|---:|---:|---:|
+| Pentium OverDrive 83 | 15.02 fps | 15.02 fps | 15.02 fps |
+| Am5x86-133 | 14.97 fps | 15.02 fps | 15.02 fps |
+| 486DX2-66 | 15.02 fps | 15.02 fps | 14.97 fps |
+| 486DX2-50 | 14.99 fps | 15.02 fps | 14.97 fps |
+
+**12/12 PASS** against the 14.90 fps KPI line. Audio ships at
+`AUDIO_TIER=high` (22050 Hz stereo, the Makefile default), validated at
+that tier as part of the same campaign -- both tiers now cost the same at
+runtime on this hardware's 8-bit DAC, so there is no performance reason to
+prefer `low`. Visuals clean, no corruption, across multi-minute runs on
+every card.
 
 **On the 15 fps target.** Passage's own `game.cpp` sets
 `lockedFrameRate = 15`, which makes 15.000 fps a *ceiling* rather than a
 goal: the frame pacer's deadline advances by exactly one tick per frame, so
 no frame is ever permitted to run fast to repay a slow one, and the measured
-average can approach 15.000 but never cross it. Steady-state sits at
-14.9989 fps -- the game holding its cap to four significant figures. The
-run-average shortfall is a handful of discrete ~250-325 ms stalls in the
-VRAM flush (documented in `PLAN.md`); eliminating all of them would land
-near 14.99, still under the ceiling. See `PLAN.md` for the full campaign,
-including the eight hypotheses that were falsified along the way.
+average can approach 15.000 but never cross it -- which is why the table
+above clusters so tightly rather than spreading with CPU speed the way an
+uncapped benchmark would. A reproducible sub-1-fps rounding effect on some
+CPU/card pairings (a life landing one second "over" its usual length) does
+not threaten the KPI anywhere; see `docs/BENCHMARK-PLAN.md` for the full
+campaign, including the fix-validation arc and the hypotheses (for both
+that effect and the earlier pacer work) that were falsified along the way.
 
-| CPU | Role |
-|---|---|
-| 486DX2-50 | minimum and recommended target (per `ports.yaml`) |
-| 486DX2-66 | validated benchmark configuration |
+Minimum and recommended target CPU is 486DX2-50 (per `ports.yaml`).
+Remaining before `RELEASE_READY`: `dist` packaging (binary + CWSDPMI +
+license texts).
 
 ---
 
@@ -126,8 +136,10 @@ make stage       AUDIO_TIER=low      # assemble build/stage/
 > **`AUDIO_TIER` must match across all three commands.** It selects both the
 > compiled-in audio format and the rendered `SONG.WAV`, and a mismatch is not
 > a build error -- it plays the music at the wrong speed. `low` is
-> 11025 Hz mono (validated on real hardware); `high` is 22050 Hz stereo
-> (never real-hardware tested). If you switch tiers, re-run all three.
+> 11025 Hz mono; `high` is 22050 Hz stereo and the Makefile default. Both
+> are validated on real hardware, and both cost the same at runtime on this
+> hardware's 8-bit DAC -- `high` is what ships. If you switch tiers, re-run
+> all three.
 
 ### 4. Smoke-test locally (optional)
 
@@ -196,9 +208,9 @@ was re-run, after which it reported `Universal VESA VBE 6.70 (VBE 3.0)`.
 
 | Card | Status |
 |---|---|
-| **Cirrus CL-GD5430/5434** | **Validated.** Runs banked -- the shared layer force-disables LFB on this chip for a genuine hardware aperture defect. 14.94 fps. |
-| **S3 ViRGE (86C375)** | **Validated.** Uses LFB at 320x240x16. 14.16-14.5 fps. |
-| **ATI Mach64** | **Not yet verified with the current build.** Expected to work, but the compiled-in `MAX_BPP=16` cap changes which VESA mode it negotiates -- it previously ran 640x480x24 banked, since it has no 320x240 mode. Worth a confirmation run before trusting a benchmark number from it. |
+| **Cirrus CL-GD5430/5434** | **Validated, all four CPU tiers.** Runs banked -- the shared layer force-disables LFB on this chip for a genuine hardware aperture defect. 14.97-15.02 fps. |
+| **S3 ViRGE (86C375)** | **Validated, all four CPU tiers.** Uses LFB at 320x240x16. 15.02 fps across the whole CPU range -- the least margin-sensitive of the three cards. |
+| **ATI Mach64** | **Validated, all four CPU tiers, current build.** Runs 640x480 16bpp via LFB, forced with `SDL_HINT_DOS_FORCE_MODE_ID` (no native 320x240 mode). 14.97-15.02 fps. |
 
 ## How This Project Is Developed
 

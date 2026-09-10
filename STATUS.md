@@ -16,7 +16,7 @@ threading: none (only Thread::staticSleep() -- a sleep, not a spawned thread)
 networking: none
 external_dependencies: minorGems (subset -- file/path, string, settings, time, thread, sha1, TGA image decode, simple vector)
 copyrighted_assets: none -- engine and assets both public domain, ship together
-dos_status: PLAYABLE
+dos_status: OPTIMIZING
 dos_minimum_target: 486DX2-50
 dos_recommended_target: 486DX2-50
 maintainer: ecliptik
