@@ -47,7 +47,7 @@ Minimum and recommended target CPU is 486DX2-50. Methodology:
 
 ## Game Assets
 
-Unlike doskutsu, **DOSSAGE ships its own game data.** Passage's engine *and* its graphics/music assets were placed in the public domain by Jason Rohrer himself -- see [Components and License](#components-and-license) below -- so there is no separate "supply your own copy" step. The `.tga` graphics and the synthesized music data are vendored alongside the engine source, pinned to the same upstream revision.
+**DOSSAGE ships its own game data.** Passage's engine *and* its graphics/music assets were placed in the public domain by Jason Rohrer himself -- see [Components and License](#components-and-license) below -- so there is no separate "supply your own copy" step. The `.tga` graphics and the synthesized music data are vendored alongside the engine source, pinned to the same upstream revision.
 
 ---
 
@@ -201,7 +201,7 @@ was re-run, after which it reported `Universal VESA VBE 6.70 (VBE 3.0)`.
 
 ## How This Project Is Developed
 
-DOSSAGE is developed agentically with [Claude Code](https://claude.com/code), following the same model as doskutsu:
+DOSSAGE is developed agentically with [Claude Code](https://claude.com/code):
 
 - **Claude Code authors the patches** across the SDL3 DOS backend and the Passage engine. They land as `patches/<vendor>/NNNN-*.patch` files in this repository.
 - **Human developers drive testing and iteration**: real-hardware playthroughs, bug reports, and deciding what to fix next.
@@ -211,7 +211,7 @@ DOSSAGE is developed agentically with [Claude Code](https://claude.com/code), fo
 
 ## Components and License
 
-DOSSAGE's own source -- the build system, scripts, and documentation -- is **MIT-licensed** ([LICENSE](./LICENSE)). Unlike doskutsu, the shipped binary carries no copyleft obligation: Passage and its minorGems dependency are both public domain, and SDL3 is zlib. See [LICENSE-REVIEW.md](./LICENSE-REVIEW.md) for the full review.
+DOSSAGE's own source -- the build system, scripts, and documentation -- is **MIT-licensed** ([LICENSE](./LICENSE)). The shipped binary carries no copyleft obligation: Passage and its minorGems dependency are both public domain, and SDL3 is zlib. See [LICENSE-REVIEW.md](./LICENSE-REVIEW.md) for the full review.
 
 | Component | Purpose | License | In `DOSSAGE.EXE` |
 |---|---|---|---|
