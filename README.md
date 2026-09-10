@@ -4,7 +4,7 @@ DOSSAGE is a port of Jason Rohrer's [Passage](https://hcsoftware.sourceforge.net
 
 The name is a portmanteau of **DOS** and **Passage**, matching the naming convention of its sibling port [doskutsu](https://forgejo.ecliptik.com/ecliptik/doskutsu) (DOS + Doukutsu Monogatari).
 
-DOSSAGE exists for preservation and the engineering challenge of running Passage on a 1990s MS-DOS PC. It is also intended to become the copy-paste starting skeleton for future ports in the [sdl-dos-ports](https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports) hub -- Passage's engine surface (raw SDL 1.2, no mixer/image/font libraries) is about as small as a real DOS port gets.
+DOSSAGE exists for preservation and the engineering challenge of running Passage on a 1990s MS-DOS PC.
 
 ### Screenshots
 
@@ -19,12 +19,10 @@ DOSSAGE exists for preservation and the engineering challenge of running Passage
 
 ## Status
 
-**OPTIMIZING -- the 15 fps KPI is closed across the full real-hardware
-matrix.** DOSSAGE boots, renders, plays with audio, and completes full
-sessions on period hardware. A dedicated fix-validation campaign
-(`patches/passage/0036`, `0038`-`0041`) closed the 486DX2-50 leg -- this
-port's own minimum-target CPU -- and a follow-on 3-card x 4-CPU sweep
-confirmed every pairing on the merged build (`build_sha12=a5e9835f12e7`):
+**Playable and performance-validated across the full range of hardware
+this port targets.** DOSSAGE boots, renders, plays with audio, and
+completes full sessions -- from a 486DX2-50 up through a Pentium
+OverDrive, on three different video cards:
 
 | CPU | ATI Mach64 215CT/-ET | S3 ViRGE 86C375 | Cirrus CL-GD5430/5434 |
 |---|---:|---:|---:|
@@ -33,28 +31,16 @@ confirmed every pairing on the merged build (`build_sha12=a5e9835f12e7`):
 | 486DX2-66 | 15.02 fps | 15.02 fps | 14.97 fps |
 | 486DX2-50 | 14.99 fps | 15.02 fps | 14.97 fps |
 
-**12/12 PASS** against the 14.90 fps KPI line. Audio ships at
-`AUDIO_TIER=high` (22050 Hz stereo, the Makefile default), validated at
-that tier as part of the same campaign -- both tiers now cost the same at
-runtime on this hardware's 8-bit DAC, so there is no performance reason to
-prefer `low`. Visuals clean, no corruption, across multi-minute runs on
-every card.
+Passage's own source caps the game at 15 fps by design, so these numbers
+aren't something to maximize -- they confirm the port holds that ceiling
+everywhere, even on its slowest supported CPU. Audio ships at 22050 Hz
+stereo; a lower-quality 11025 Hz mono tier is also available for
+constrained setups and costs nothing extra at runtime, so there's no
+performance tradeoff either way. Visuals are clean on every card and CPU
+tested.
 
-**On the 15 fps target.** Passage's own `game.cpp` sets
-`lockedFrameRate = 15`, which makes 15.000 fps a *ceiling* rather than a
-goal: the frame pacer's deadline advances by exactly one tick per frame, so
-no frame is ever permitted to run fast to repay a slow one, and the measured
-average can approach 15.000 but never cross it -- which is why the table
-above clusters so tightly rather than spreading with CPU speed the way an
-uncapped benchmark would. A reproducible sub-1-fps rounding effect on some
-CPU/card pairings (a life landing one second "over" its usual length) does
-not threaten the KPI anywhere; see `docs/BENCHMARK-PLAN.md` for the full
-campaign, including the fix-validation arc and the hypotheses (for both
-that effect and the earlier pacer work) that were falsified along the way.
-
-Minimum and recommended target CPU is 486DX2-50 (per `ports.yaml`).
-Remaining before `RELEASE_READY`: `dist` packaging (binary + CWSDPMI +
-license texts).
+Minimum and recommended target CPU is 486DX2-50. Full methodology and
+per-machine results: `docs/BENCHMARK-PLAN.md`.
 
 ---
 
