@@ -10,6 +10,8 @@ The name is a portmanteau of **DOS** and **Passage**, matching the naming conven
 
 DOSSAGE exists for preservation and the engineering challenge of running Passage on a 1990s MS-DOS PC.
 
+This project was 100% built agentically using [Claude Code](https://claude.com/claude-code).
+
 ### Screenshots
 
 | | |
@@ -200,7 +202,7 @@ was re-run, after which it reported `Universal VESA VBE 6.70 (VBE 3.0)`.
 
 ## How This Project Is Developed
 
-DOSSAGE is developed agentically with [Claude Code](https://claude.com/code):
+DOSSAGE is developed agentically with [Claude Code](https://claude.com/claude-code):
 
 - **Claude Code authors the patches** across the SDL3 DOS backend and the Passage engine. They land as `patches/<vendor>/NNNN-*.patch` files in this repository.
 - **Human developers drive testing and iteration**: real-hardware playthroughs, bug reports, and deciding what to fix next.

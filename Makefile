@@ -275,6 +275,104 @@ stage: $(BUILD_DIR)/dossage.exe check-song-tier
 	cp -r $(PASSAGE_SRC)/music    "$(STAGE_DIR)/music"
 	cp -r $(PASSAGE_SRC)/settings "$(STAGE_DIR)/settings"
 
+# --- Release archive ---------------------------------------------------------
+#
+# `make dist` packages build/stage/ (already correct and license-compliant
+# per the `stage` target above -- DOSSAGE.EXE, CWSDPMI.EXE/.DOC, and the
+# graphics/music/settings data) plus three DOS-readable text files into a
+# zip anyone can extract straight onto a DOS machine. See LICENSE-REVIEW.md
+# and THIRD-PARTY.md's own "Verification" checklist for what belongs here.
+
+DIST_DIR   := $(REPO_ROOT)/dist
+DIST_STAGE := $(DIST_DIR)/dossage
+DIST_ZIP   := $(DIST_DIR)/dossage.zip
+
+# CRLF filter for DOS-facing text files -- DOS EDIT/TYPE expect CRLF, not
+# bare LF (a repo doc copied in as-is reads as one long line on DOS).
+CRLF := awk 'BEGIN{ORS="\r\n"} {sub(/\r$$/, ""); print}'
+
+define DIST_README
+DOSSAGE - Passage for MS-DOS
+============================
+
+DOSSAGE is a port of Jason Rohrer's Passage (2007) to MS-DOS, cross-
+compiled with DJGPP against a DOS-ported SDL3.
+
+HOW TO RUN
+----------
+
+ 1. Copy this whole folder onto your DOS machine, e.g. C:\DOSSAGE\.
+    DOSSAGE.EXE, CWSDPMI.EXE, and the graphics/music/settings
+    directories must stay together -- the game finds its own assets
+    by relative path.
+ 2. Boot DOS with HIMEM.SYS loaded and NO EMS page frame (DJGPP uses
+    DPMI, not EMS).
+ 3. If you have a Sound Blaster or compatible card, set BLASTER, e.g.
+        SET BLASTER=A220 I5 D1 H5 T6
+    DOSSAGE runs silently with no sound card at all.
+ 4. Load a VESA 2.0+ BIOS driver if your video card doesn't provide
+    one in its firmware (UniVBE as a fallback).
+ 5. Run:
+        C:\>CD \DOSSAGE
+        C:\DOSSAGE>DOSSAGE
+
+Any key dismisses the title screen and starts the game. Arrow keys
+move. Q or ESC quits. A full playthrough is about five minutes --
+that is the whole point of the piece.
+
+GAME DATA
+---------
+
+This bundle includes the complete game: Passage's own graphics and
+music are public domain from the same author as the engine, so
+nothing further needs to be supplied or extracted.
+
+CWSDPMI
+-------
+
+CWSDPMI.EXE is the DPMI host required by DJGPP-compiled programs on
+DOS. It must be in the current directory or on PATH when DOSSAGE.EXE
+runs. License terms: CWSDPMI.DOC.
+
+LICENSES
+--------
+
+This binary carries no copyleft obligation: Passage and its minorGems
+dependency are both public domain, and SDL3 is zlib. The port source
+code in this repository is MIT licensed. See LICENSE.TXT (this
+repo's MIT license plus a note on the public-domain game content) and
+3RDPARTY.TXT (the complete attribution matrix).
+
+SOURCE
+------
+
+Full source, including build scripts and DOS-port patches:
+    @REPO_URL@
+endef
+export DIST_README
+
+.PHONY: dist
+dist: stage
+	@test -f LICENSE        || (echo "error: LICENSE missing in repo root" >&2; exit 1)
+	@test -f THIRD-PARTY.md || (echo "error: THIRD-PARTY.md missing" >&2; exit 1)
+	@rm -rf "$(DIST_STAGE)" "$(DIST_ZIP)"
+	@mkdir -p "$(DIST_STAGE)"
+	@cp -r "$(STAGE_DIR)/." "$(DIST_STAGE)/"
+	@# STAGE_DIR is also this port's own DOSBox-X/real-hardware mount root,
+	@# so it accumulates runtime artifacts across test runs (RUNMANI.LOG,
+	@# LOGS/, CWSDPMI.SWP, DOSBox-X's own .DBLOCALFILE_ATR_* markers) that
+	@# are not part of the game and must never ship in a release archive.
+	@rm -rf "$(DIST_STAGE)/LOGS" "$(DIST_STAGE)/RUNMANI.LOG" \
+	        "$(DIST_STAGE)/CWSDPMI.SWP" "$(DIST_STAGE)"/.DBLOCALFILE_ATR_*
+	@$(CRLF) < LICENSE        > "$(DIST_STAGE)/LICENSE.TXT"
+	@$(CRLF) < THIRD-PARTY.md > "$(DIST_STAGE)/3RDPARTY.TXT"
+	@url='https://forgejo.ecliptik.com/ecliptik/dossage'; \
+	    printf '%s\n' "$$DIST_README" | \
+	    awk -v url="$$url" '{gsub(/@REPO_URL@/, url); print}' | \
+	    $(CRLF) > "$(DIST_STAGE)/README.TXT"
+	@(cd "$(DIST_STAGE)" && zip -q -r "$(DIST_ZIP)" .)
+	@echo "built $(DIST_ZIP) ($$(stat -c '%s' $(DIST_ZIP)) bytes)"
+
 # --- Music render tool: host-native, not part of the DOS build -------------
 #
 # Re-renders gameSource/music/SONG.WAV from the unmodified synthesis logic
