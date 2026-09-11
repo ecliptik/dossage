@@ -18,7 +18,7 @@ their content, only sequences it.
 ## 0. Orient before touching anything
 
 - `vcctrl_profiles()` — confirm which profiles are actually running. This
-  rig has carried `gateway2000` alone and `gateway2000` + `jezebel` on one
+  rig has carried `gateway2000` alone and `gateway2000` + `modernpc` on one
   daemon at different times; don't assume which from a stale memory.
 - `vcctrl_activity()` — who holds the input lock, what's in flight. Refuse
   to proceed past a held lock or a running job you didn't start; see
