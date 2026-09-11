@@ -6,12 +6,19 @@
 # vcctrl.yaml (that file stays machine-local and is not tracked in any
 # repo).
 #
-# See sdl-dos-ports' docs/hardware-testing.md before using this: the
-# harness/vcctrl-sweep|-cell|-collect orchestration scripts are currently
-# doskutsu-coupled and may not yet run a second project's profile
-# unattended. Filled in only as far as BOOTSTRAP status actually knows --
-# the env/profile_witness/sweeps sections below are placeholders until
-# this port has a boot-menu and a scripted/TAS-driven run to describe.
+# UPDATED 2026-09-11 (vcctrl-harness-migration fork): harness/vcctrl-sweep|
+# -cell|-collect are no longer doskutsu-coupled -- see sdl-dos-ports'
+# docs/hardware-testing.md, "The orchestration layer" section. This file
+# was previously written before dossage's own real-hardware campaign
+# existed (2026-08-26) and left every env/profile_witness field as a
+# guessed placeholder; this pass replaces the guesses with facts verified
+# against this repo's own source/patches/docs/campaign notes
+# (docs/rig-runbook.md, docs/BENCHMARK-PLAN.md, docs/benchmarks/,
+# HARDWARE.md in the hub) rather than inventing new ones. dossage's own
+# real-hardware campaign to date used vcctrl's generic MCP file-transfer
+# tools directly (vcctrl_stage_file/vcctrl_send_file, per
+# docs/rig-runbook.md sec. 4), not vcctrl-cell -- this file documents the
+# real facts either way, useful whichever tool ends up consuming them.
 
 version: 1
 name: dossage
@@ -22,30 +29,98 @@ target:
   configs: "CFGS"
   ftp_put: "C:\\MTCP\\PUT.BAT"
 
-  # TBD -- dossage has no boot-menu / multi-profile CONFIG.SYS yet (no
-  # sound-vs-network profile split exists to prove). Fill in once this
-  # port's DOS boot environment is designed, following the one-directional
-  # discipline in doskutsu's own profile (docs/HARNESS-STANDARD.md sec. 12,
-  # docs/OPEN-FAULTS.md sec. 15) -- do not invent a variable nothing reads.
+  # The executable a single cell launches (harness/vcctrl-cell), or that
+  # docs/rig-runbook.md's own manual launch recipe types directly.
+  # Verified: Makefile's `stage`/`dist-list` targets install
+  # build/dossage.exe as DOSSAGE.EXE. Takes no CLI arguments -- unlike
+  # dosags's AGS.EXE, its launch shape is closer to doskutsu's own
+  # (bare exe name + env vars set beforehand), so vcctrl-cell may actually
+  # fit this port once its own real-hardware workflow is reconsidered --
+  # not attempted in this pass, which only corrects the profile's facts.
+  exe: "DOSSAGE.EXE"
+
+  # No config-file-switching mechanism exists (verified: no .CFG/SETUP.EXE
+  # machinery anywhere in the Makefile or docs, unlike doskutsu's
+  # SETUP.EXE/DOSKUTSU.CFG). Null, not guessed.
+  default_cfg: null
+  cfg_dest: null
+
+  # No CLRENV.BAT equivalent exists for dossage. Null -- there is no bulk
+  # env-clear command to call.
+  env_clear_cmd: null
+
+  # No unattended-sweep harness exists for dossage (no `sweeps:`/
+  # `machines:`-driven multi-cell reel -- the whole "game" is a single
+  # ~5-minute deterministic life). Null; vcctrl-sweep already refuses
+  # cleanly for a profile with no sweeps section.
+  sweep_entry_cmd: null
+
+  # Per-video-card overrides, REQUIRED not preferred -- verified directly
+  # from docs/rig-runbook.md sec. 6 (Phase 2 campaign notes, 2026-09-04):
+  # "SET SDL_HINT_DOS_FORCE_MODE_ID=0x0111 does not persist across a power
+  # cycle -- it must be re-typed before the FIRST Mach64 launch of a
+  # session, every time. Skipping it once let the Mach64 negotiate its
+  # unforced default (512x384)," which the primary VGA capture stick
+  # cannot lock (reads as a false hang, not a real one -- see that same
+  # section). This is the same shape as doskutsu's own
+  # DOS_PORT_PIN_NATIVE_MODE Mach64 override, a different lever
+  # (SDL_HINT_DOS_FORCE_MODE_ID, already a shared/-layer, neutral-named
+  # hint -- see vendor/SDL/src/video/dos/SDL_dosmodes.c) with the same
+  # "this card needs an explicit push away from its own bad default"
+  # shape. ViRGE and Cirrus (also used in this campaign) have no
+  # equivalent override documented -- absence here reflects that, not an
+  # omission.
+  card_overrides:
+    mach64:
+      force_mode_id: "0x0111"
+
+  # THE BOOT-PROFILE WITNESS. Verified, not guessed: dossage runs on the
+  # SAME physical rig as doskutsu (docs/rig-runbook.md sec. 3, confirmed
+  # live 2026-09-02 from the boot banner: "this rig's PGSB profile boots
+  # to picogus-sb-dbop13 v4.1.1 firmware, Running in Sound Blaster 2.0
+  # mode on port 220, IRQ 7, DMA 3"), so the same BLASTER-based witness
+  # doskutsu's own profile uses applies here unchanged -- see that file's
+  # own comment for the full one-directional-witness reasoning
+  # (docs/HARNESS-STANDARD.md sec. 12, docs/OPEN-FAULTS.md sec. 15 in the
+  # vcctrl repo). Unlike dosags (whose audio is stubbed pre-Sound-
+  # milestone, making a profile witness moot for now), dossage's audio is
+  # real and already load-bearing in its own campaign notes ("Silence at
+  # the title is not evidence of an audio fault" -- rig-runbook sec. 6),
+  # so a correct boot-profile witness is genuinely useful here, not just
+  # copied for form's sake.
   profile_witness:
-    variable: TBD
-    proves: TBD
+    variable: BLASTER
+    value: "A220 I7 D3 P330 T3"
+    proves: "NOT the NET profile (a sound profile is loaded)"
     direction: one-way
 
-  # TBD -- Passage has no TAS-replay/deterministic-seed/log-tag env vars
-  # (yet). Fill in only once this port actually implements the equivalent
-  # of doskutsu's DOSKUTSU_TAS_* family -- inventing names here that
-  # nothing on the target consults would silently no-op.
+  # CORRECTED 2026-09-11: every semantic key below was previously mapped
+  # to a GUESSED name (DOSSAGE_TAS_REPLAY etc.) that this file's own prior
+  # header honestly flagged as "TBD... Passage has no TAS-replay/
+  # deterministic-seed/log-tag env vars (yet)". Verified directly against
+  # this repo's own source and every patch under patches/passage/ and
+  # patches/SDL/: no DOSSAGE_-prefixed env var of any kind exists (the
+  # RUNMANIFEST log is a hardcoded fopen("RUNMANI.LOG", "a") with no tag
+  # mechanism, confirmed in patches/passage/0034). Left explicitly null
+  # rather than replaced with a different guess -- a real
+  # replay/seed/auto-exit/log-tag/shot-ticks mechanism for dossage simply
+  # does not exist yet. `force_mode_id` is the one real, verified lever
+  # (see card_overrides above), and note it is a shared SDL_HINT_*, not a
+  # DOSSAGE_*-prefixed name -- there has never been a reason to invent a
+  # port-specific name for it.
   env:
-    replay: DOSSAGE_TAS_REPLAY
-    seed: DOSSAGE_TAS_PRNG_SEED
-    auto_exit_tick: DOSSAGE_TAS_AUTO_EXIT_TICK
-    log_tag: DOSSAGE_LOG_TAG
-    pin_native_mode: DOSSAGE_PIN_NATIVE_MODE
-    shot_ticks: DOSSAGE_SHOT_TICKS
+    replay: null
+    seed: null
+    auto_exit_tick: null
+    log_tag: null
+    pin_native_mode: null
+    shot_ticks: null
+    capture_flag: null
+    force_mode_id: SDL_HINT_DOS_FORCE_MODE_ID
 
 timing:
-  # TBD -- no boot menu exists yet to measure a timeout window against.
+  # Matches doskutsu's own measured value -- same physical rig, same
+  # CONFIG.SYS boot-menu timeout window.
   menu_window_s: 14
 
 # ----------------------------------------------------------------- machines
