@@ -60,7 +60,7 @@ if [[ -n "$staged" ]]; then
     echo "  Land the change in the sdl-dos-ports repo instead, then:"
     echo
     echo "    git subtree pull --prefix=.sdl-dos-ports \\"
-    echo "        ssh://git@forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git main --squash"
+    echo "        <hub origin URL> main --squash"
     echo
     echo "  A patch this port owns belongs in patches/SDL/ (or patches/passage/,"
     echo "  patches/minorgems/) -- those are outside the subtree and yours to edit."

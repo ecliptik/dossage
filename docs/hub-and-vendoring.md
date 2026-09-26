@@ -1,7 +1,7 @@
 # The hub subtree and per-port vendoring
 
 How this repo relates to
-[sdl-dos-ports](https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports), which
+sdl-dos-ports (the private hub repo), which
 files are ours to edit, and which will be silently reverted if we edit them.
 
 None of this is derivable from the code -- a subtree looks exactly like
@@ -82,12 +82,13 @@ it. That is the mechanism working, not a bug.
 ## Landing a change in `shared/`
 
     # 1. clone the hub, branch, make the change there
-    git clone ssh://git@forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git
+    # (forgejo.example.ts.net = the private tailnet Forgejo's host)
+    git clone ssh://git@forgejo.example.ts.net/ecliptik/sdl-dos-ports.git
     # 2. test it against this repo by pointing at your clone's scripts
     # 3. commit and push to the hub
     # 4. bring it back:
     git subtree pull --prefix=.sdl-dos-ports \
-        ssh://git@forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git main --squash
+        ssh://git@forgejo.example.ts.net/ecliptik/sdl-dos-ports.git main --squash
 
 The subtree pin is not machine-readable the way a submodule's was: it
 lives only in the squash commit's message (`Squashed '.sdl-dos-ports/'

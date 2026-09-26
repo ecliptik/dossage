@@ -112,11 +112,13 @@ bases (`/blob/<tag>/` on GitHub, `/src/tag/<tag>/` on Forgejo).
    list; don't assume the target still does what its comment says.
 4. **Write the notes once**, as a real file (not a shell heredoc --
    heredocs are exactly how the hard-wrap bug happened), then derive a
-   per-host copy by substituting the link base:
+   per-host copy by substituting the link base (`FORGEJO` is taken from
+   `origin` so the private host name never lands in this file):
    ```
+   FORGEJO="https://$(git remote get-url origin | sed -E 's#^(ssh://)?[^@]+@([^/:]+).*#\2#')"
    sed 's|__REPO_URL__|https://github.com/ecliptik/dossage/blob/vX.Y.Z|g' \
        notes.md > notes-github.md
-   sed 's|__REPO_URL__|https://forgejo.ecliptik.com/ecliptik/dossage/src/tag/vX.Y.Z|g' \
+   sed "s|__REPO_URL__|$FORGEJO/ecliptik/dossage/src/tag/vX.Y.Z|g" \
        notes.md > notes-forgejo.md
    ```
 5. **GitHub** (needs `gh auth status` to show a valid login first):
@@ -130,11 +132,11 @@ bases (`/blob/<tag>/` on GitHub, `/src/tag/<tag>/` on Forgejo).
    TOKEN=$(cat ~/.forgejo_token)
    JSON_BODY=$(python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))" < notes-forgejo.md)
    curl -s -X POST -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
-     "https://forgejo.ecliptik.com/api/v1/repos/ecliptik/dossage/releases" \
+     "$FORGEJO/api/v1/repos/ecliptik/dossage/releases" \
      -d "{\"tag_name\":\"vX.Y.Z\",\"target_commitish\":\"main\",\"name\":\"vX.Y.Z\",\"body\":$JSON_BODY,\"draft\":false,\"prerelease\":false}"
    # then, with the returned release id:
    curl -s -X POST -H "Authorization: token $TOKEN" \
-     "https://forgejo.ecliptik.com/api/v1/repos/ecliptik/dossage/releases/<id>/assets?name=dossage.zip" \
+     "$FORGEJO/api/v1/repos/ecliptik/dossage/releases/<id>/assets?name=dossage.zip" \
      -F "attachment=@dist/dossage.zip"
    ```
 7. **Verify both landed correctly** by reading the stored body back via

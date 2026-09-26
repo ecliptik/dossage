@@ -2,50 +2,50 @@
   "version": 1,
   "skills": {
     "vcctrl-camera": {
-      "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
-      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "source": "https://github.com/ecliptik/vcctrl.git",
+      "sourceUrl": "https://github.com/ecliptik/vcctrl.git",
       "sourceType": "git",
       "skillPath": ".agents/skills/vcctrl-camera/SKILL.md",
       "computedHash": "b06b2451371971d1b0b999db7697303b9ed50810fb61d5728831c1f55354df62"
     },
     "vcctrl-common-workflows": {
-      "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
-      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "source": "https://github.com/ecliptik/vcctrl.git",
+      "sourceUrl": "https://github.com/ecliptik/vcctrl.git",
       "sourceType": "git",
       "skillPath": ".agents/skills/vcctrl-common-workflows/SKILL.md",
       "computedHash": "d71472349162762d5637ebf2a6bea1980cfce09dd5f35fe8ffde8e6cde7f5f56"
     },
     "vcctrl-dinspect-sysinfo": {
-      "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
-      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "source": "https://github.com/ecliptik/vcctrl.git",
+      "sourceUrl": "https://github.com/ecliptik/vcctrl.git",
       "sourceType": "git",
       "skillPath": ".agents/skills/vcctrl-dinspect-sysinfo/SKILL.md",
       "computedHash": "ea4845a5e2dc7b86aecece231a45fc1ffdeca5b853ce64fe279f8c160dca4f1d"
     },
     "vcctrl-mcp-workflows": {
-      "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
-      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "source": "https://github.com/ecliptik/vcctrl.git",
+      "sourceUrl": "https://github.com/ecliptik/vcctrl.git",
       "sourceType": "git",
       "skillPath": ".agents/skills/vcctrl-mcp-workflows/SKILL.md",
       "computedHash": "f91c51e6b392ea53c3e8101b6ee232c5f18318149e1c919bfc2000b76dbdd7f1"
     },
     "vcctrl-repo-conventions": {
-      "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
-      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "source": "https://github.com/ecliptik/vcctrl.git",
+      "sourceUrl": "https://github.com/ecliptik/vcctrl.git",
       "sourceType": "git",
       "skillPath": ".agents/skills/vcctrl-repo-conventions/SKILL.md",
       "computedHash": "7226efdb32689a3dcb07c1ecfb9883408f5258717ab4448158289d77269b6aba"
     },
     "vcctrl-rig-hazards": {
-      "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
-      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "source": "https://github.com/ecliptik/vcctrl.git",
+      "sourceUrl": "https://github.com/ecliptik/vcctrl.git",
       "sourceType": "git",
       "skillPath": ".agents/skills/vcctrl-rig-hazards/SKILL.md",
       "computedHash": "35a7a3f396a97f7fb33226c16dc8e2966e5206497a3db77970e61d9508a0f6cf"
     },
     "vcctrl-webkvm-copy": {
-      "source": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
-      "sourceUrl": "https://forgejo.ecliptik.com/ecliptik/vcctrl.git",
+      "source": "https://github.com/ecliptik/vcctrl.git",
+      "sourceUrl": "https://github.com/ecliptik/vcctrl.git",
       "sourceType": "git",
       "skillPath": ".agents/skills/vcctrl-webkvm-copy/SKILL.md",
       "computedHash": "0c13c84174d46c40e15ff2568eae914371fe46406292bb77ecc37e40ba5b922f"

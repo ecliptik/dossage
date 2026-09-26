@@ -136,9 +136,9 @@ Cave Story's freeware-but-not-redistributed data in doskutsu. See
 
 ### Sibling / hub projects
 
-- **doskutsu** (reference port, doc style): https://forgejo.ecliptik.com/ecliptik/doskutsu -- MIT
+- **doskutsu** (reference port, doc style): https://github.com/ecliptik/doskutsu -- MIT
 - **sdl-dos-ports** (shared SDL3-DOS platform layer, consumed as a
-  submodule): https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports -- MIT
+  submodule): ecliptik/sdl-dos-ports (private) -- MIT
 
 No code from doskutsu is linked into DOSSAGE; it is a structural and
 stylistic reference only. `sdl-dos-ports`'s `shared/` layer *is* consumed

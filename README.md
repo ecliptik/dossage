@@ -52,9 +52,9 @@ methodology: [docs/BENCHMARK-PLAN.md](docs/BENCHMARK-PLAN.md).
 
 ## Download
 
-See [Releases](https://forgejo.ecliptik.com/ecliptik/dossage/releases) for pre-built binaries (also mirrored on [GitHub](https://github.com/ecliptik/dossage/releases)), or build from source (see [Quickstart](#quickstart)).
+See [Releases](https://github.com/ecliptik/dossage/releases) for pre-built binaries, or build from source (see [Quickstart](#quickstart)).
 
-**Latest release:** [`dossage.zip`](https://forgejo.ecliptik.com/ecliptik/dossage/releases/download/v1.0.0/dossage.zip) (v1.0.0)
+**Latest release:** [`dossage.zip`](https://github.com/ecliptik/dossage/releases/download/v1.0.0/dossage.zip) (v1.0.0)
 
 Contains `DOSSAGE.EXE`, the `CWSDPMI.EXE` DPMI host, license texts, and the complete game -- see [Game Assets](#game-assets) above.
 
@@ -85,7 +85,7 @@ From a clean clone to a playable DOS build.
 ### 1. Clone and fetch
 
 ```bash
-git clone https://forgejo.ecliptik.com/ecliptik/dossage.git
+git clone https://github.com/ecliptik/dossage.git
 cd dossage
 ```
 
@@ -93,11 +93,12 @@ That's the whole checkout step. The shared SDL3-DOS platform layer lives at
 `.sdl-dos-ports/` and is vendored into this repository as a **git subtree**,
 so it arrives with the clone -- there is no submodule to initialise.
 
-To pull later hub changes into it:
+To pull later hub changes into it (the hub lives on a private Forgejo;
+`forgejo.example.ts.net` stands in for its host):
 
 ```bash
 git subtree pull --prefix=.sdl-dos-ports \
-  https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git main --squash
+  https://forgejo.example.ts.net/ecliptik/sdl-dos-ports.git main --squash
 ```
 
 Each such commit records the exact upstream hub SHA in its own message

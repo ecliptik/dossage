@@ -366,7 +366,7 @@ dist: stage
 	        "$(DIST_STAGE)/CWSDPMI.SWP" "$(DIST_STAGE)"/.DBLOCALFILE_ATR_*
 	@$(CRLF) < LICENSE        > "$(DIST_STAGE)/LICENSE.TXT"
 	@$(CRLF) < THIRD-PARTY.md > "$(DIST_STAGE)/3RDPARTY.TXT"
-	@url='https://forgejo.ecliptik.com/ecliptik/dossage'; \
+	@url='https://github.com/ecliptik/dossage'; \
 	    printf '%s\n' "$$DIST_README" | \
 	    awk -v url="$$url" '{gsub(/@REPO_URL@/, url); print}' | \
 	    $(CRLF) > "$(DIST_STAGE)/README.TXT"
