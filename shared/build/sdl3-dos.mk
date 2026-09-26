@@ -162,6 +162,30 @@ SDL3_PATCHES       := $(wildcard $(REPO_ROOT)/patches/SDL/*.patch)
 SDL3_MIXER_PATCHES := $(wildcard $(REPO_ROOT)/patches/SDL_mixer/*.patch)
 SDL3_IMAGE_PATCHES :=
 
+# Vendor-tree STATE stamps. The patch files above say what the tree SHOULD
+# contain; they do not change when the tree itself does. Rolling vendor/SDL
+# back one commit to build a control (without the newest patch), rolling it
+# forward again, or editing it by hand changed what cmake would compile but
+# not one prerequisite of libSDL3.a, so `make` rebuilt nothing and the
+# "control" came out as the real library with a different stamp -- caught
+# in dosags (2026-09-23) only because the control had to fail and did not.
+# Each stamp holds the vendor tree's HEAD sha plus a hash of its uncommitted
+# diff and status. Its rule runs on every make (FORCE), but the file is only
+# rewritten when that content changes, so its mtime -- what make compares --
+# moves exactly when the tree does. A tree that is not a git checkout gets a
+# constant stamp (no worse than before).
+VENDOR_STATE_DIR := $(BUILD_DIR)/vendor-state
+
+.PHONY: FORCE_VENDOR_STATE
+FORCE_VENDOR_STATE:
+
+$(VENDOR_STATE_DIR)/%.state: FORCE_VENDOR_STATE
+	@mkdir -p $(@D)
+	@{ git -C "$(VENDOR_DIR)/$*" rev-parse HEAD 2>/dev/null || echo "not-a-git-checkout"; \
+	   { git -C "$(VENDOR_DIR)/$*" diff HEAD; git -C "$(VENDOR_DIR)/$*" status --porcelain; } 2>/dev/null | sha256sum; } > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; \
+	 else mv -f $@.tmp $@; echo "vendor/$* changed (HEAD $$(head -c 12 $@)) -> its library rebuilds"; fi
+
 # --- Stage 1: SDL3 ---------------------------------------------------------------
 
 .PHONY: sdl3
@@ -177,7 +201,7 @@ sdl3: verify-patches-applied $(SYSROOT)/lib/libSDL3.a
 # equivalent following that pattern.
 SDL_REVISION_PIN := SDL3-DOS+$(PORT_NAME)
 
-$(SYSROOT)/lib/libSDL3.a: $(SDL3_PATCHES) $(MANIFEST_FILE) | djgpp-check
+$(SYSROOT)/lib/libSDL3.a: $(SDL3_PATCHES) $(MANIFEST_FILE) $(VENDOR_STATE_DIR)/SDL.state | djgpp-check
 	@test -d "$(SDL3_SRC)" || (echo "error: $(SDL3_SRC) not present -- run make sources" >&2; exit 1)
 	@test -f "$(TOOLCHAIN_FILE)" || (echo "error: $(TOOLCHAIN_FILE) not found -- is this SDL checkout post-DOS-backend?" >&2; exit 1)
 	# SDL_TESTS=OFF -- skip SDL3's upstream test executables, which link
@@ -202,7 +226,7 @@ $(SYSROOT)/lib/libSDL3.a: $(SDL3_PATCHES) $(MANIFEST_FILE) | djgpp-check
 .PHONY: sdl3-mixer
 sdl3-mixer: verify-patches-applied $(SYSROOT)/lib/libSDL3_mixer.a
 
-$(SYSROOT)/lib/libSDL3_mixer.a: $(SYSROOT)/lib/libSDL3.a $(SDL3_MIXER_PATCHES)
+$(SYSROOT)/lib/libSDL3_mixer.a: $(SYSROOT)/lib/libSDL3.a $(SDL3_MIXER_PATCHES) $(VENDOR_STATE_DIR)/SDL_mixer.state
 	@test -d "$(MIXER_SRC)" || (echo "error: $(MIXER_SRC) not present -- run make sources" >&2; exit 1)
 	cmake -S $(MIXER_SRC) -B $(SDL3_MIXER_BUILD) $(CMAKE_COMMON) \
 	    -DSDLMIXER_VENDORED=ON \
@@ -234,7 +258,7 @@ $(SYSROOT)/lib/libSDL3_mixer.a: $(SYSROOT)/lib/libSDL3.a $(SDL3_MIXER_PATCHES)
 .PHONY: sdl3-image
 sdl3-image: verify-patches-applied $(SYSROOT)/lib/libSDL3_image.a
 
-$(SYSROOT)/lib/libSDL3_image.a: $(SYSROOT)/lib/libSDL3.a $(SDL3_IMAGE_PATCHES)
+$(SYSROOT)/lib/libSDL3_image.a: $(SYSROOT)/lib/libSDL3.a $(SDL3_IMAGE_PATCHES) $(VENDOR_STATE_DIR)/SDL_image.state
 	@test -d "$(IMAGE_SRC)" || (echo "error: $(IMAGE_SRC) not present -- run make sources" >&2; exit 1)
 	cmake -S $(IMAGE_SRC) -B $(SDL3_IMAGE_BUILD) $(CMAKE_COMMON) \
 	    -DSDLIMAGE_VENDORED=ON \

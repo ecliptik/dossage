@@ -34,6 +34,37 @@ If your port wants to reuse these two probes, either:
 
 Everything else in this directory does not have this dependency.
 
+## `opl3midi.c` needs a real compiled SDL3-DOS, not bare metal
+
+Unlike the rest of this directory, `opl3midi.c` (the `shared/audio/
+opl3_sink.{c,h}` validation probe) calls into the real SDL3-DOS OPL3
+register primitives (`SDL_dos_audio_synth.h`, SDL patch 0037) rather than
+talking to hardware directly -- it needs to link against an actual
+`libSDL3.a` built with that patch applied (any port's own
+`build/sysroot/lib/libSDL3.a` works; this hub does not vendor/build SDL
+itself). See the build recipe in the probe's own header comment. It also
+needs `oplmode = opl3` (or `auto`) in whatever DOSBox-X conf runs it --
+this hub's own shared confs default `oplmode = none`, so a plain
+`dosbox-run.sh` run will report "no chip detected" (harmlessly; every
+`midi_sched` parse/dispatch witness the probe reports is unaffected) --
+use a scratch copy of the conf with that one setting changed to actually
+exercise the sink's register I/O.
+
+## `wbsinkmd.c` needs a real compiled SDL3-DOS, not bare metal
+
+Same requirement as `opl3midi.c` above, but for `shared/audio/
+waveblaster_sink.{c,h}` (SDL patches 0037/0047/0080-0101, the MPU-401
+primitives) instead of the OPL3 ones. Unlike `opl3midi.c`, its own `.bat`
+sets `SDL_HINT_DOS_AUDIO_PROBE_MPU401=1` for that one run -- see
+`wbsinkmd.c`'s own header for why this is the only place that env var
+should ever be set (real-hardware lockup risk on at least one card;
+DOSBox-X-only diagnostic use). This is a genuinely different probe from
+the older `wbmidi.c`/`wbtest*.c` files in this same directory, which
+predate `midi_sched`/`waveblaster_sink` entirely and talk to MPU-401 ports
+directly with no SDL/shared-layer involvement -- kept as-is, not
+superseded, since they answer a different (bare-metal hardware forensics)
+question.
+
 ## Naming
 
 Probe-owned environment variables have been renamed from doskutsu's

@@ -68,6 +68,9 @@ the formal contract underneath all of this tiering — what a test harness
 run must be able to prove about itself before anyone trusts it, agent or
 human. `shared/skills/dos-hardware-validation` and `dos-realhw-verification`
 are its practical application on this hub's own vcctrl-driven rig.
+`docs/harness-lessons.md` holds the dated incidents behind that skill's
+`harness-invariants.md` checklist -- read it when a checklist line needs
+its reason.
 
 Passing DOSBox-X (or even 86Box) is not proof a build is actually correct
 on real hardware — a clean smoke can pass while never exercising the
@@ -77,6 +80,12 @@ symbol was compiled in, not that it ran. See
 actually taken (stale build caches, emulator-vs-hardware I/O divergence,
 build-host tooling traps) and the discipline for debugging a bug that's
 specific to real hardware.
+
+Never commit an audio capture of a game's music (QA `.ogg`/`.wav`/`.opus`/
+`.flac`/`.mp3` from a harness run, in any repo): it is the game's
+copyrighted music. Keep it local and commit only its sha256 and the
+numbers read from it (dosags had to purge them from its whole history,
+2026-09-25).
 
 ## Never contribute upstream
 

@@ -43,6 +43,11 @@ Distilled from the same real doskutsu/vcctrl campaign session as
    from "written but incomplete." `references/log-collection.md`
 5. **Power management** — safe power-cycle discipline for a rig where the
    physical wiring isn't software-verifiable. `references/power-management.md`
+   Includes the one recurring hang worth knowing by sight: the target
+   stops answering the keyboard right after an FTP session, at the
+   return reboot chord -- signature, the four-step check, the one-power-
+   cycle recovery, and the rule that any script which reboots the target
+   must detect and recover from it by itself.
 6. **Multi-agent coordination** — a spawned subagent does not inherit the
    rig connection, and more than one caller reaching the rig-driving
    session at once is a real double-dispatch hazard against physical

@@ -144,7 +144,7 @@ game-specific" rule — the cases above are specifically about a port
 discovering something true about the *shared* platform layer while
 working on its own engine, not about promoting engine code itself.
 
-## Two gotchas beyond the basics above
+## Gotchas beyond the basics above
 
 - **`LC_ALL=C` when enumerating or sorting patch files.** Locale-aware
   collation (the shell's default) treats `-` as punctuation promoted next
@@ -168,6 +168,38 @@ working on its own engine, not about promoting engine code itself.
   before generating the new patch, or the resulting file will fail to
   apply cleanly (or worse, apply with silently wrong context) for the
   next person who runs the series from scratch.
+- **A rolled-back vendor tree does not rebuild by itself unless the build
+  depends on the tree's state.** Checking `vendor/SDL` out one commit back
+  (to build a control without the newest patch), forward again, or editing
+  it by hand changes no patch file, so a library that depends only on the
+  patch files is never rebuilt. The "control" is then the real library with
+  a different build stamp; dosags only caught it because the control had to
+  fail and didn't. `shared/build/sdl3-dos.mk` makes each SDL library depend
+  on `build/vendor-state/<vendor>.state`, which is rewritten only when the
+  tree's HEAD or uncommitted diff changes. A port with its own build rules
+  for a vendored library needs the same dependency.
+- **A build stamp must not contain the checkout's absolute path.** If a
+  stamp like `BUILD_SHA12` hashes the OUTPUT of `sha256sum FILE`, that
+  output line includes FILE's path exactly as given (`<hash>
+  /home/.../worktree/.sdl-dos-ports/shared/...`). The same holds for
+  echoed compiler or cmake flags that contain `-I$(HUB_DIR)/...` or any
+  other absolute path. So identical code built in two worktrees, or two
+  clones, gets two different stamps, and the binaries differ only in
+  those 12-13 stamp bytes. In dosags (2026-09-24) that looked like a code
+  difference that wasn't there. Hash CONTENTS keyed by RELATIVE path, in
+  a fixed order, with each file's name in the input. The one recommended
+  form:
+  `(cd "$ROOT" && LC_ALL=C sort <list> | xargs sha256sum) | sha256sum`.
+  Each input line is `<hash>  <relative path>`, so a rename, or bytes
+  moving from one file into the next, changes the stamp. A bare
+  `xargs cat` of the files would not catch either. Replace absolute roots
+  in echoed flags with a placeholder
+  (`$(subst $(REPO_ROOT),@ROOT@,...)`). The hub's own hashes follow this
+  rule:
+  - `shared/scripts/series-sha.sh` folds in basenames only, plus
+    contents, in `LC_ALL=C` order;
+  - `sdl3-dos.mk`'s vendor-state stamp hashes git's output, whose paths
+    are repo-relative.
 - **Uncommitted vendor-tree work is one `apply-patches.sh` run away from
   gone.** `apply-patches.sh` hard-resets a vendor tree to its pinned SHA
   before applying the patch series -- routine, and destructive to

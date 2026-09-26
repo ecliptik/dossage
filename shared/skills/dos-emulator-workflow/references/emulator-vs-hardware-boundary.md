@@ -69,10 +69,13 @@ Sometimes the only way to get useful signal out of DOSBox-X for a given
 subsystem is to explicitly work around a place where its emulation
 diverges from real hardware -- `SDL_DOS_AUDIO_SB_SKIP_DETECTION` (see
 `tooling.md`) is the concrete example already baked into this hub's own
-shipped confs: real-hardware-validated SB16 detection logic never
-succeeds under DOSBox-X's emulated DSP-reset behavior, so the shipped
-confs skip detection and trust the configured `BLASTER` line instead,
-purely so audio can init under emulation at all.
+runner: it skips detection and trusts the configured `BLASTER` line.
+**Corrected 2026-09-22:** the "emulator limitation" it worked around was
+our own runner's `-silent` flag switching the emulated Sound Blaster
+off. DOSBox-X's SB answers detection fine without it (`tooling.md`).
+That is the second lesson here: before building an escape hatch around
+"the emulator can't do X", rule out your own invocation, then write
+down which experiment showed the limitation.
 
 **The rule this generalizes to**: any env var, conf setting, or code path
 that exists specifically to work around an emulator limitation must be
@@ -125,3 +128,29 @@ local when:
   hardware-conditional** -- see `dos-realhw-verification`'s divergence-
   debugging material for how to reason about that gap rather than
   assuming the emulator result generalizes.
+
+## Deterministic timing comparisons: run DOSBox-X at FIXED cycles
+
+**Established 2026-09-23 (dosags lab-mmd, MMDCF cells).** At `cycles=max`
+DOSBox-X runs as fast as the host lets it, so its timings follow HOST load.
+That includes other workers' builds, which a DOSBox-X lock can't serialise.
+The same binary and settings gave `render_backbuffer` 1.10-1.70 ms/call
+(+-22%) and a script event 17.5% apart between two runs. At a fixed cycle
+count (`cycles=fixed 40000`, normal core), two runs of the same binary and
+settings produced **byte-identical** logs.
+
+So, for any lab comparison of time between builds or arms (an A/B, a probe's
+own cost, a before/after ranking), use fixed cycles. Use `cycles=max` only
+for counts and functional checks, where speed doesn't change the answer.
+
+**The caveat that keeps this honest:** fixed cycles charges roughly one cycle
+per emulated instruction, so it ranks code by INSTRUCTION COUNT, not by a real
+CPU's cycles per instruction. On the 486 those differ by kind of code. In the
+same run at fixed 40000, a tight blit loop (`render_backbuffer`, 9.42 ms/call)
+matched the real 486DX2-66 (9.43 ms). Branchy, large-footprint
+script-interpreter code ran 2.2x FASTER than on the 486 (10.98 vs 24.26
+ms/tick). So a fixed-cycles ranking is exact between two versions of the
+SAME code. Across different kinds of code it needs a per-kind factor
+measured on real hardware before it predicts 486 time. That's the same
+"validate the lab metric before trusting it" rule
+`benchmark/references/self-driving-loop.md` applies to any counter.

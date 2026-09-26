@@ -130,3 +130,12 @@ and across the hardware matrix in `HARDWARE.md`.
 - When working inside `shared/`, ask "would every port want this?" before
   adding it — if the answer is "just this one," it belongs in that port's
   own repo instead.
+- A multi-session real-hardware campaign runs as a self-driving loop: a
+  dated plan of record in the port's `PLAN.md` (gates, KPI definitions,
+  operator decisions, scoped standing authorization, work order), one
+  coordinator session that verifies and owns this hub, one long-lived
+  named worker subagent that owns the port repo and drives the target
+  machine, dispatch briefs with stop conditions decided in advance, and
+  durable findings folded back into `docs/`/`HARDWARE.md` as they land.
+  The procedure is `shared/skills/benchmark/references/self-driving-loop.md`
+  (`/sdldos:benchmark`); the skeleton is in `templates/PORT-PLAN.md`.

@@ -48,10 +48,14 @@ if [ -e "$TARGET_DIR" ]; then
 fi
 
 # Prefer this repo's own configured remote for the subtree source URL, so
-# a fork or a not-yet-pushed local clone still works; fall back to the
-# known forgejo location otherwise.
-HUB_REMOTE="$(git -C "$HUB_DIR" remote get-url origin 2>/dev/null || true)"
-HUB_REMOTE="${HUB_REMOTE:-ssh://git@forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git}"
+# a fork or a not-yet-pushed local clone still works. No hardcoded
+# fallback: the hub lives on the private tailnet Forgejo, and its name must
+# not be baked into files that get vendored into public port repos.
+HUB_REMOTE="${HUB_REMOTE:-$(git -C "$HUB_DIR" remote get-url origin 2>/dev/null || true)}"
+if [ -z "$HUB_REMOTE" ]; then
+  echo "error: $HUB_DIR has no origin remote; set HUB_REMOTE to the hub's git URL" >&2
+  exit 1
+fi
 
 echo "==> Creating $TARGET_DIR"
 mkdir -p "$TARGET_DIR"
@@ -102,15 +106,18 @@ cp "$HUB_DIR"/shared/patches/sdl3-mixer/*.patch patches/SDL_mixer/
 
 # VCCTRL_REMOTE follows the same override convention as other hub-location
 # vars in this codebase (EMULATORS_ROOT, SDL_DOS_PORT_ROOT) -- set it if
-# vcctrl lives somewhere other than the default forgejo location.
-VCCTRL_REMOTE="${VCCTRL_REMOTE:-https://forgejo.ecliptik.com/ecliptik/vcctrl.git}"
+# vcctrl lives somewhere other than its public GitHub mirror.
+VCCTRL_REMOTE="${VCCTRL_REMOTE:-https://github.com/ecliptik/vcctrl.git}"
 
-# HUB_PLUGIN_URL is what the new repo's tracked .claude/settings.json
+# HUB_PLUGIN_URL is what the new repo's untracked .claude/settings.local.json
 # points Claude Code at to fetch this hub as a plugin marketplace. It is
-# deliberately NOT $HUB_REMOTE: that is whatever this checkout's origin
-# is (an ssh:// URL here), which would demand an SSH key on every machine
-# that ever opens the port repo. The public HTTPS URL clones anonymously.
-HUB_PLUGIN_URL="${HUB_PLUGIN_URL:-https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git}"
+# $HUB_REMOTE rewritten to HTTPS: an ssh:// URL would demand an SSH key on
+# every machine that ever opens the port repo, while HTTPS clones
+# anonymously. It stays out of the tracked settings.json because port repos
+# are mirrored publicly and the hub's host is a private tailnet name.
+HUB_PLUGIN_URL="${HUB_PLUGIN_URL:-$(printf '%s\n' "$HUB_REMOTE" | sed -E \
+  -e 's#^ssh://[^@/]+@([^/:]+)(:[0-9]+)?/#https://\1/#' \
+  -e 's#^[^@/:]+@([^:/]+):#https://\1/#')}"
 
 # Claude Code skills arrive two ways. This hub's own skills (port, review,
 # benchmark, dos-*) are the `sdldos` plugin: the project settings written
@@ -121,8 +128,16 @@ HUB_PLUGIN_URL="${HUB_PLUGIN_URL:-https://forgejo.ecliptik.com/ecliptik/sdl-dos-
 # plugin, so they still install flat via `npx skills` (real files under
 # .agents/skills/, symlinked into .claude/skills/). See
 # shared/skills/README.md.
-echo "==> Writing .claude/settings.json (enables the sdldos plugin from $HUB_PLUGIN_URL)"
-cat > .claude/settings.json <<EOF
+echo "==> Writing .claude/settings.json (enables the sdldos plugin) and"
+echo "    .claude/settings.local.json (its marketplace, $HUB_PLUGIN_URL)"
+cat > .claude/settings.json <<'EOF'
+{
+  "enabledPlugins": {
+    "sdldos@sdl-dos-ports": true
+  }
+}
+EOF
+cat > .claude/settings.local.json <<EOF
 {
   "extraKnownMarketplaces": {
     "sdl-dos-ports": {
@@ -139,9 +154,9 @@ cat > .claude/settings.json <<EOF
 EOF
 
 # The rest of .claude/ is local session state (agents, skill symlinks,
-# settings.local.json) and stays untracked, per doskutsu's convention;
-# only settings.json travels with the repo so the plugin enablement
-# reaches every clone. git can't re-include a file under an ignored
+# settings.local.json, which carries the private marketplace URL) and stays
+# untracked, per doskutsu's convention; only settings.json travels with the
+# repo so the plugin enablement reaches every clone. git can't re-include a file under an ignored
 # parent directory, hence `.claude/*` rather than `.claude/`.
 if [ ! -f .gitignore ] || ! grep -q '^\.claude' .gitignore; then
   cat >> .gitignore <<'EOF'
@@ -154,13 +169,19 @@ if [ ! -f .gitignore ] || ! grep -q '^\.claude' .gitignore; then
 EOF
 fi
 
+# Only the four hardware-portable skills, not --all -- vcctrl also ships
+# vcctrl-repo-conventions and vcctrl-webkvm-copy, which document vcctrl's
+# own contributor conventions and have nothing to do with driving a rig
+# from a port repo.
+VCCTRL_SKILLS=(-s vcctrl-mcp-workflows -s vcctrl-common-workflows -s vcctrl-rig-hazards -s vcctrl-camera)
+
 echo "==> Installing vcctrl skills via npx skills"
 if ! command -v npx >/dev/null 2>&1; then
   echo "    npx not found -- skipping. Install later from this repo's root:" >&2
-  echo "    npx skills add $VCCTRL_REMOTE --full-depth --all -a claude-code" >&2
-elif ! npx --yes skills@latest add "$VCCTRL_REMOTE" --full-depth --all -a claude-code -y >/dev/null 2>&1; then
+  echo "    npx skills add $VCCTRL_REMOTE --full-depth -a claude-code ${VCCTRL_SKILLS[*]}" >&2
+elif ! npx --yes skills@latest add "$VCCTRL_REMOTE" --full-depth -a claude-code -y "${VCCTRL_SKILLS[@]}" >/dev/null 2>&1; then
   echo "    warning: vcctrl skills failed to install (offline? VCCTRL_REMOTE wrong?)." >&2
-  echo "             Re-run manually: npx skills add $VCCTRL_REMOTE --full-depth --all -a claude-code" >&2
+  echo "             Re-run manually: npx skills add $VCCTRL_REMOTE --full-depth -a claude-code ${VCCTRL_SKILLS[*]}" >&2
 fi
 
 # VCCTRL_MCP_URL is intentionally NOT a hardcoded default anywhere in this
@@ -233,7 +254,8 @@ echo "     vendor/sources.manifest -- never guess."
 echo "  3. Copy .sdl-dos-ports/shared/agents/*.md into .claude/agents/ and"
 echo "     fill in the placeholders (see shared/agents/README.md's table)."
 echo "  4. Open this repo in Claude Code and trust it: .claude/settings.json"
-echo "     offers the sdldos plugin (/sdldos:review, /sdldos:benchmark, ...)."
+echo "     offers the sdldos plugin (/sdldos:review, /sdldos:benchmark, ...);"
+echo "     other machines need .claude/settings.local.json copied over too."
 echo "  5. Set this repo's own git remote and push when ready."
 echo "  6. In the sdl-dos-ports hub repo, update ports.yaml: set"
 echo "     dos_status: RESEARCH and port_repo_url for '${NAME}'."

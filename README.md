@@ -4,12 +4,11 @@ A hub for porting SDL-based games to MS-DOS, built on the SDL3 DOS backend
 proven by [doskutsu](https://github.com/ecliptik/doskutsu) (Cave Story on
 real 486/Pentium-class DOS hardware via SDL3, DJGPP, and CWSDPMI).
 
-This repository does not contain the games themselves. Each port lives in
-its own git repository and pulls in the reusable platform layer from
-[`shared/`](shared/) as a git subtree at `.sdl-dos-ports/` (a submodule
-for a port scaffolded before 2026-08-31 -- both are valid). This repo
-tracks status, hosts that shared layer, documents the porting strategy
-and hardware/QA process, and showcases finished ports.
+This repo hosts the reusable platform layer, tracks port status, and
+documents the shared porting strategy -- it contains no game source
+itself. Each port lives in its own repository, wired to
+[`shared/`](shared/) via git subtree at `.sdl-dos-ports/` (or, for a port
+scaffolded before 2026-08-31, a submodule -- see `scripts/new-port.sh`).
 
 See [`CLAUDE.md`](CLAUDE.md) for the rules an AI agent (or contributor)
 should follow when working in this repo.
@@ -18,29 +17,27 @@ should follow when working in this repo.
 
 | Priority | Project | Upstream | License | Port repo | Status | Difficulty |
 |---:|---|---|---|---|---|---:|
-| 0 | doskutsu (Cave Story) | [nxengine/nxengine-evo](https://github.com/nxengine/nxengine-evo) | GPL-3.0 (verified) | [ecliptik/doskutsu](https://github.com/ecliptik/doskutsu) | RELEASE_READY | reference |
-| 1 | Adventure Game Studio | [adventuregamestudio/ags](https://github.com/adventuregamestudio/ags) | unverified | unclaimed | BACKLOG | 5 |
+| 0 | doskutsu (Cave Story) | [nxengine/nxengine-evo](https://github.com/nxengine/nxengine-evo) | GPL-3.0 (verified) | [ecliptik/doskutsu](https://github.com/ecliptik/doskutsu) | RELEASE_READY — 14.6-32.2 fps | reference |
+| 1 | Adventure Game Studio | [adventuregamestudio/ags](https://github.com/adventuregamestudio/ags) | Artistic-2.0 (verified) | ecliptik/dosags (private) | PLAYABLE — 40Hz/40fps plan in progress on the 486DX2-66 | 5 |
 | 2 | VVVVVV | [TerryCavanagh/VVVVVV](https://github.com/TerryCavanagh/VVVVVV) | unverified — see caution below | unclaimed | BACKLOG | 3 |
 | 3 | Meritous | TBD | unverified | unclaimed | BACKLOG | 2 |
 | 4 | OpenJazz | [OSSGames/GAME-SDL-openjazz](https://github.com/OSSGames/GAME-SDL-openjazz) | unverified | unclaimed | BACKLOG | 2-3 |
 | 5 | POWDER | TBD | unverified — may not be open source, see `ports.yaml` | unclaimed | BACKLOG | 2 |
 | 6 | Kobo Deluxe | TBD | unverified | unclaimed | BACKLOG | 3-4 |
 | 7 | Blob Wars: Metal Blob Solid | TBD | unverified | unclaimed | BACKLOG | 3-4 |
-| 8 | Passage | [jasonrohrer/Passage](https://github.com/jasonrohrer/Passage) | public domain (verified) | [ecliptik/dossage](https://forgejo.ecliptik.com/ecliptik/dossage) | OPTIMIZING | 1 |
+| 8 | Passage | [jasonrohrer/Passage](https://github.com/jasonrohrer/Passage) | public domain (verified) | [ecliptik/dossage](https://github.com/ecliptik/dossage) | OPTIMIZING — 14.97-15.02 fps | 1 |
 | 9 | SuperTux 0.1.x | TBD | unverified | unclaimed | BACKLOG | 4 |
 
-This table is generated from [`ports.yaml`](ports.yaml) — the machine-
-readable source of truth, including `upstream_license_verified` per entry.
-"Unverified" means exactly that: nobody has yet read the actual upstream
-LICENSE/COPYING file for that project in this repo. **Never treat an
-unverified license as known** — see [`docs/licensing.md`](docs/licensing.md)
-and `ports.yaml`'s header comment. VVVVVV in particular has historically
-been distributed under source-available terms that are not automatically
-redistribution rights; see its `ports.yaml` entry before assuming anything.
+Generated from [`ports.yaml`](ports.yaml), the source of truth. "Unverified"
+means nobody has yet read that project's actual LICENSE/COPYING file in this
+repo — **never treat it as known**, see [`docs/licensing.md`](docs/licensing.md).
+VVVVVV in particular has a history of source-available terms that aren't
+automatically redistribution rights; check its `ports.yaml` entry first.
 
-See [`COMPATIBILITY.md`](COMPATIBILITY.md) for a richer boots/playable/
-hardware-target matrix as ports progress, and [`gallery/`](gallery/) for
-screenshots, performance notes, and features per finished port.
+Status benchmarks are each port's best real-hardware fps range across the
+reference CPUs (see [`gallery/`](gallery/) for doskutsu's full per-CPU/
+audio-backend breakdown); [`COMPATIBILITY.md`](COMPATIBILITY.md) has the
+fuller boots/playable/hardware matrix.
 
 ## Getting started
 
@@ -71,30 +68,29 @@ Use the review skill: /sdldos:review
 | `/sdldos:benchmark` | This hub, or any port repo | Run or record a real-hardware performance KPI campaign. |
 | `/sdldos:dos-emulator-workflow`, `/sdldos:dos-hardware-validation`, `/sdldos:dos-rig-operations`, `/sdldos:dos-realhw-verification` | Any port repo | Local DOSBox-X work, rig campaigns, day-to-day rig mechanics, and real-hardware verification discipline. |
 
-**How the skills get there.** This repo is a Claude Code plugin
-(`.claude-plugin/plugin.json`, name `sdldos`; the root `skills/` directory
-is its skill set). Every port repo scaffolded by `/sdldos:port` carries a
-tracked `.claude/settings.json` that registers this hub as a plugin
-marketplace and enables the plugin, so anyone who opens and trusts a port
-repo is offered every skill above under the `sdldos:` prefix, with no
-per-repo copy of any `SKILL.md`. This hub's own `.claude/settings.json`
-does the same for sessions here. To install it by hand anywhere else:
+**How the skills get there.** This repo is itself a Claude Code plugin
+(`.claude-plugin/plugin.json`, name `sdldos`; root `skills/` is its skill
+set). Every port scaffolded by `/sdldos:port` carries a tracked
+`.claude/settings.json` that enables this hub as a plugin marketplace, so
+opening and trusting that repo (or this one) offers every skill above
+under the `sdldos:` prefix, with no per-repo `SKILL.md` copies. To install
+it by hand elsewhere:
 
 ```sh
-/plugin marketplace add https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git
+/plugin marketplace add https://forgejo.example.ts.net/ecliptik/sdl-dos-ports.git
 /plugin install sdldos@sdl-dos-ports
 ```
 
-The installed plugin is a snapshot keyed by the `version` in
-`.claude-plugin/plugin.json`: `/plugin update sdldos` fetches a new
-version and says "already at the latest version" otherwise, so a skill
-or layout change here must bump that version to reach installed copies.
-`claude --plugin-dir <path-to-this-hub>` loads the working tree for one
-session instead (it overrides the installed copy), which is how to try a
-skill edit here before pushing it. vcctrl's
-skills are not a plugin; `/sdldos:port` installs them flat into the new
-repo via `npx skills`. A port scaffolded before the plugin existed, or an
-agent that can't load plugins (Codex, Cursor), is covered in
+(`forgejo.example.ts.net` stands in for the private tailnet Forgejo;
+use the hub's real `origin` URL.)
+
+A skill or layout change here only reaches installed copies once the
+`version` in `.claude-plugin/plugin.json` is bumped and `/plugin update
+sdldos` is run; `claude --plugin-dir <path-to-this-hub>` loads the working
+tree for one session instead, for trying an edit before pushing. vcctrl's
+skills aren't part of this plugin -- `/sdldos:port` installs them flat via
+`npx skills`. Ports scaffolded before the plugin existed, or agents that
+can't load plugins (Codex, Cursor), are covered in
 `shared/skills/README.md`.
 
 Deeper reference, only when a skill points you at it:

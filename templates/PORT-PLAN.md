@@ -48,6 +48,42 @@ smoke-test result.
       `LICENSE-REVIEW.md` complete, `gallery/<name>/` entry written in the
       hub repo
 
+## Campaign plan of record
+
+<!--
+Add one dated section like this when a real-hardware campaign starts
+(performance, compatibility, a hardware-specific bug hunt). It is what
+lets the work run as a self-driving loop -- see the benchmark skill's
+references/self-driving-loop.md. Build it from RAW logs, not summaries.
+Delete this comment block and copy the skeleton per campaign.
+
+### <Campaign name>, opened <YYYY-MM-DD>
+
+**Gates (what "done" means, measurable, on named hardware):**
+- Gate 1 -- ...
+
+**KPI definitions:** which figure judges each gate, and what each figure
+does NOT show (e.g. static-screen fps; whole-run vs steady-state rate).
+
+**Operator decisions (dated):**
+- ...
+
+**Standing real-hardware authorization:** <granted by the operator
+directly / not granted>. Scope: <power on/off, staging builds, this
+plan's cells>. Anything outside it still needs an explicit ask.
+
+**Stated in advance:** what is probably out of reach, why, and the
+evidence -- so it can be challenged.
+
+**Work order (each slice its own commit; instrument -> predict -> fix ->
+emulator correctness gate -> pre-registered ABBA -> record):**
+- [ ] P0 -- fix the yardstick ...
+- [ ] P1 -- ...
+
+**Retractions:** mark a wrong section retracted in place with a pointer
+to the correction; never delete it.
+-->
+
 ## Open questions / risks
 
 <!-- e.g. audio decode cost on 486, licensing terms, engine features with

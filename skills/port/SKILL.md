@@ -94,9 +94,12 @@ registers this hub as a plugin marketplace and enables the `sdldos`
 plugin (so `/sdldos:review`, `/sdldos:benchmark`, ... are offered to
 anyone who opens and trusts the repo -- no per-repo copy of any
 `SKILL.md`), plus the `.gitignore` rule that lets that one file be
-tracked, and installs vcctrl's skills flat via
-`npx skills add <repo> --full-depth --all -a claude-code`. Don't redo
-either by hand.
+tracked, and installs vcctrl's four hardware-portable skills flat via
+`npx skills add <repo> --full-depth -a claude-code -s vcctrl-mcp-workflows
+-s vcctrl-common-workflows -s vcctrl-rig-hazards -s vcctrl-camera` (not
+`--all` -- that would also pull in `vcctrl-repo-conventions` and
+`vcctrl-webkvm-copy`, which are about vcctrl's own contributor
+conventions, not this port). Don't redo either by hand.
 
 Skill *knowledge* is auto-installed; real-hardware *access* is not, and
 that's deliberate, not a gap. If `VCCTRL_MCP_URL` is set in the

@@ -63,6 +63,192 @@ this one (directly or via `shared/patches/sdl3-dos/0010`'s
 `SDL_HINT_DOS_PREFER_LFB` interaction with it), tearing is expected
 behavior for that path, not a defect.
 
+**Decide the tearing trade explicitly, by genre, and record the
+decision** -- it is a judgment call the operator should make once rather
+than a question each slice re-opens. dosags took this path by default
+after measuring what it buys on a 486 (present cost 15.95 -> 3.44 ms on
+one candidate, and the whole speed ordering between presentation modes
+collapsing once the per-rect path was reachable), with the operator's
+reasoning recorded as: "tearing is fine, these are adventure games" --
+mostly-static screens, no scrolling, no camera motion, so a tear is
+rarely visible and never mid-action. **A port with scrolling or fast
+motion must not inherit that decision unexamined.** Note also that a
+camera photo cannot clear tearing on its own: an exposure integrates
+over roughly a CRT refresh, so a transient tear blurs rather than
+freezes -- photos can show tearing is not gross or continuous, and
+nothing stronger. Judge it in motion, or judge it by genre.
+
+## No low-res mode on the card: present unscaled, never scale to fill
+
+Some cards cannot produce 320x200/320x240 VESA modes at all (the ATI
+Mach64 CT/ET cannot double-scan -- see "Real hardware can diverge..."
+below and `HARDWARE.md`). The engine then lands in a larger mode, and the
+tempting default -- scale the game frame up to fill it -- is the single
+most expensive thing a port can do on a 486. Two ports have now measured
+this on the same Mach64:
+
+- **doskutsu** (320x240x8) first ran at **2.2 fps** on this card, and
+  reached a **27.6 fps** baseline after presenting *unscaled*: the
+  320x240 picture centered in the 640x480 surface, the flush scoped to
+  the logical rect (`center-oversized: flush rect=320x240@160,120
+  bytes=76800`), margins cleared once, writes going straight to VRAM.
+  (`doskutsu/qa-results/2026-08-13-r2-mach64/`, `2026-08-21-mach64-tilemap/`.)
+- **dosags** (AGS; Trilby's Notes, 320x240x8 to the engine) took the
+  scale-to-fill default (AGS's "fullscreen desktop" = 640x480, 2x): every
+  real present cost ~76 ms -- ~34 ms for the 2x scale blit plus ~42 ms to
+  push 307,200 bytes -- against 76,800 bytes for the game's own frame,
+  exactly doskutsu's frame size. Hand-optimizing the
+  scaler (integer fast path, word stores) won real fps but only polishes
+  a step that should not exist. (dosags `PLAN.md`, "40/40 plan".)
+
+**FIRST: check what the card in the machine actually enumerates. This
+whole section is about a card that CANNOT do low-res modes, which is the
+worst case, not the normal one.** A card with a real 320x200/320x240
+mode should simply SET it -- full screen, 64,000-76,800 bytes, no scale,
+no centring, no margins, strictly better than every rung below.
+doskutsu's own logs show exactly that on this rig's other cards
+(`qa-results/2026-08-11-DX266-full/602SDL.LOG`,
+`2026-08-13-r2-POD83/GE3SDL.LOG`: `0x01F9 320x200 bpp=8`,
+`0x01F8 320x240 bpp=8`, plus 15/16/24/32-bit 320x240). **Select the
+presentation mode per card from the live enumerated list, never once
+globally** -- a default chosen on a Mach64 is wrong for a ViRGE.
+
+**Candidate ladder when the card genuinely has no low-res mode, best
+first. Status is stated per rung -- do not quote an unproven rung as
+fact:**
+
+1. **Classic VGA Mode 13h, for 320x200 8-bit games only.** Full-screen
+   picture, 64,000 bytes per frame, no VESA involved (the shared backend
+   always enumerates a synthetic Mode 13h entry). Reasoning: a vendor's
+   "no double scanning" note is about the VESA/accelerator modes; Mode
+   13h runs on the legacy VGA core, which does its own line doubling,
+   and every VGA-compatible card must run it for ordinary DOS games.
+   **STATUS: reasoning plus one piece of prior evidence -- doskutsu's
+   SETUP.EXE mode-13h video bench was validated on this Mach64
+   (`doskutsu/docs/internal/MACH64-TRIAGE.md`); from THIS backend it is
+   confirmed only on DOSBox-X (dosags, 2026-09-10).** Verify it sets,
+   displays correctly (use a camera, not only VGA capture -- see the
+   stale-frame hazards in `dos-hardware-validation`), and restores the
+   console on exit. **Check the engine's own reported native resolution
+   before planning on this rung, not the game's catalogue entry:** dosags
+   found that none of its fixtures qualifies -- Trilby's Notes is listed
+   as 320x200 but AGS's compiled letterbox option makes it 320x240 to the
+   engine (`Game native resolution: 320 x 240 (8 bit)
+   letterbox-by-design` in every log), and its other 320x200 titles are
+   16- or 32-bit. Mode 13h is 8-bit, 320x200 exactly; a 320x240 game is
+   doskutsu's case and needs rung 2 or 3.
+2. **Centered, unscaled, in the SMALLEST enumerated mode that contains
+   the game rect.** On this Mach64's UniVBE list that is 512x384x8 (mode
+   0x01F3; 0x01D4 at 16-bit). The flush is the same size as rung 3, but
+   a 320-wide picture fills ~62% of the screen width instead of 50%.
+   **STATUS: untested from dosags (2026-09-17), queued for its bake-off.
+   doskutsu DID run here: its only clean comparison is 28.3/28.4 fps at
+   512x384 (UniVBE, LFB) against 26.9/26.8 at 640x480 (card ROM, banked)
+   -- at most +1.4 fps and confounded (provider, LFB and mode all changed
+   together). Its operator retired 512x384 for a PRODUCT reason, not a
+   technical one: the mode exists only in UniVBE's list, so shipping it
+   would require every user to install that third-party TSR. A port
+   whose target machine already runs UniVBE can use it; a port that must
+   run on the bare card ROM cannot.**
+   Known history to respect: doskutsu's 320x240 request once landed on a
+   512x384 closest-match on this chip and exposed the stride-caching bug
+   fixed in `shared/patches/sdl3-dos/0125`; and a closest-match result
+   is a property of one card + BIOS + UniVBE config, not of the chip
+   model (see below). Read the enumerated list per machine; pin the mode
+   explicitly rather than trusting closest-match.
+3. **Centered, unscaled, in 640x480.** doskutsu's exact shape on this
+   card. **STATUS: proven on real hardware (doskutsu).** The known-good
+   fallback; picture is 50% of screen width.
+
+Rules that apply to every rung:
+
+- **Scope the flush to the game's own rect** (rect-limit every stage --
+  see "Presentation path" above and `optimization.md`) -- **and check
+  that the backend path you are on honours the rect list at all.** In
+  `SDL_dosframebuffer.c` the banked path and the
+  `SDL_HINT_DOS_ALLOW_DIRECT_FRAMEBUFFER=1` path copy per rect; the
+  NORMAL LFB path never reads `rects`/`numrects` and copies the whole
+  surface every call (verified in dosags's vendored copy, 2026-09-17).
+  On that path `SDL_UpdateWindowSurfaceRects` and dirty rectangles buy
+  nothing. doskutsu sets the hint (plus `SDL_HINT_DOS_PREFER_LFB=1`);
+  dosags ran with both at 0. Both can be set from the environment
+  (`SDL_DOS_ALLOW_DIRECT_FRAMEBUFFER`, `SDL_DOS_PREFER_LFB`), so probe
+  the effect with zero code first. Trade-offs are the documented ones
+  above: no vsync, no SDL cursor compositing.
+- **An unscaled, centred present can be SLOWER than scale-to-fill until
+  the port's present code is adapted.** In dosags both the skip-unchanged
+  check and the integer fast blit required the destination to be the
+  whole window, and a bordered destination triggered a full-window fill
+  on every present -- so centring alone loses two optimizations and gains
+  a fill. Fix the present path first, then compare.
+- **Clear the margins once, not per present.** dosags found AGS issuing
+  a full-window black fill on every present of a letterboxed 640x360
+  game, ~15 ms that no timing bracket covered. A game that is already
+  1:1 letterboxed is halfway to rung 3 -- finish the job.
+- **Keep the scaled path available as an option**, never as the default
+  on the 486 tier.
+- **Let the operator choose between rungs from measurements AND a
+  picture** of how each one looks on the real monitor. Picture size is a
+  taste call; bytes per frame is not.
+- **Re-measure per card, and expect the mechanism to differ, not just
+  the numbers.** The direct-framebuffer/rect-aware path is not the same
+  code on every card: the Cirrus CL-GD5430 has a real LFB-aperture
+  defect and `shared/patches/sdl3-dos/0019` auto-disables LFB on that
+  chip, so it lands on the BANKED path -- which is per-rect aware, but
+  carries two open hazards recorded in `HARDWARE.md` (the unfixed
+  bank-select settle-delay/readback gap, and a reproduced
+  multi-hundred-ms flush stall on that exact card). A presentation
+  result is a fact about one card + BIOS + VBE provider, not about the
+  port.
+- **A dosags measurement of all four rungs on a Mach64 (2026-09-18,
+  BENCH8 anim12, real hardware, 8-bit).** Keep the two present metrics
+  apart -- conflating them cost this campaign a day chasing a
+  "discrepancy" that was two different terms:
+
+  | rung | `present_blit` | `present_update_window` | `fps_p50` |
+  |---|---|---|---|
+  | Mode 13h 1:1 | 4.22 | 7.84 | 40.00 |
+  | 512x384 centred | 4.22 | 15.95 | 26.89 |
+  | 640x480 centred 1x | 4.23 | 21.60 | 19.72 |
+  | 640x480 2x scaled | 28.22 | 24.31 | 11.83 |
+
+  **The blit is flat across the first three rungs and only explodes at
+  2x** -- the only rung that replicates pixels. What separates the top
+  three from each other is entirely `present_update_window`, tracking the
+  WINDOW SURFACE size and not the picture: 64,000/196,608/307,200 bytes
+  -> 7.84/15.95/21.60 ms, a straight line. That confirms on hardware that
+  the normal LFB path copies the whole surface and ignores a scoped rect.
+  **So the general rule is output resolution, and replication is a
+  2x-only penalty stacked on top of it** -- an earlier reading of this
+  same table named the horizontal-replication blit as *the* target, which
+  is true of the current default and false as a general statement. Do not
+  carry the blit framing to a card whose default rung differs.
+- **The fps column above is render passes, not displayed frames**, and an
+  earlier version of this entry drew a wrong conclusion from it: that the
+  top three rungs all delivered the same ~13.5 genuinely-new frames/s and
+  their gap was pure headroom. **Retracted.** The fixture's own animation
+  delay sets a hard ceiling of 20 distinct frames/s, and against that
+  ceiling the rungs differ sharply in how much they actually deliver --
+  Mode 13h displayed 19.6/s (98% of the ceiling) where the full-window
+  path managed 14.8/s (74%). The gap was not headroom; the slower path
+  was dropping content. **A render-pass count cannot tell you which of
+  those two situations you are in** -- see `docs/optimization.md` on
+  labelling fps with real-versus-skipped presents, and pair every fps
+  figure with a completeness ratio against the content's own frame rate.
+
+**Measure the bus; do not infer its ceiling from your own present path.**
+A dosags session concluded "~7 MB/s, so full-frame pushes can never beat
+~12 fps on this hardware" from its own 307,200-bytes-in-41.9-ms figure.
+doskutsu's Mach64 campaign had already measured this same card taking
+76,800 bytes in 4.77 ms (~16 MB/s, on the Pentium OverDrive 83, through
+the banked window -- and its own authors declined to call that a
+bandwidth limit, "an argument from a numerical coincidence"). The
+7.3 MB/s was a property of one code path on one CPU, not of the card.
+The claim was retracted. Before any design or any "physically out of
+reach" statement rests on a bandwidth number, run a bandwidth probe: a
+plain dword copy of each frame size you care about into the LFB (and
+into A000 under Mode 13h) on the actual target CPU.
+
 ## What `shared/patches/sdl3-dos/` already handles
 
 The hard-won VESA/VGA chip-specific work — Cirrus CL-GD5430 banked-blit
@@ -394,6 +580,29 @@ re-deriving them, and lean on the same-card doskutsu-control-run technique
 early -- it's cheaper than chasing the symptom's own mechanism first and
 it directly answers the one question ("is this the card?") that most
 determines where to look next.
+
+## Two traps in pixel code instantiated across several color depths
+
+A blit or conversion routine templated over 8/16/24/32bpp will be
+compiled several times, and both traps below are silent in most of those
+instantiations — which is what makes them dangerous. A test suite
+exercising the common depths passes.
+
+**Derive a pixel count from pointer difference, never from `sizeof`.**
+At 24bpp a pixel is three bytes behind an `unsigned char*`, so
+`sizeof(PIXEL)`-based arithmetic is correct at 8, 16 and 32 and silently
+wrong at 24 alone. One instantiation failing out of four is the worst
+possible failure distribution: every arm a casual test covers is green.
+A run-length blit in one dosags patch hit exactly this.
+
+**Never use a pointer-valued macro in a multi-declarator declaration.**
+`PIXEL_PTR rs = s, rd = d;` where the macro expands to `unsigned short*`
+declares `rs` as a pointer and **`rd` as a plain integer**, because the
+`*` binds to the first declarator only. Here the compiler rejected the
+initialization; with a compatible type it would not have, and the result
+is memory corruption rather than a wrong number. **Use a `typedef`**,
+which removes the whole class rather than requiring anyone to remember
+it.
 
 ## Reduced color depth
 

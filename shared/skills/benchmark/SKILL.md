@@ -47,9 +47,18 @@ advance (what result means fail, not just pass), attributed to a named
 
 ## 3. Pick team shape
 
-Solo + subagents for a one-off check. Once you're doing genuine iterative
-real-hardware investigation: one investigating session + one dedicated
-rig-operator session, peer-to-peer. See `shared/agents/README.md`.
+Solo + subagents for a one-off check. For a genuine iterative
+real-hardware campaign, the default that has worked best is **one
+coordinator session plus one long-lived named worker subagent** that
+owns the port repo and drives the target machine itself, run as a
+self-driving loop from a written plan of record -- see
+`references/self-driving-loop.md` for the whole procedure (plan of
+record, up-front decisions and scoped standing authorization, dispatch
+briefs with stop conditions, the slice recipe, coordinator verification
+duties, and how to re-enter the flow in a later session). Escalate to
+one investigating session + one dedicated hardware-operator session,
+peer-to-peer (`shared/agents/README.md`), only when the work really
+needs two independent lines of attention.
 
 ## 4. Start a measured-constants table
 
@@ -85,6 +94,14 @@ detail) -- non-negotiable, not just good practice when convenient:
 - Hand off raw data between sessions, not a narrated summary.
 - Batch questions into fewer, longer real-hardware rounds -- a
   file-transfer round-trip pays a fixed tax regardless of scope.
+- After every power-on of the target, run one **unscored warm-up cell**
+  (same fixture and build, recorded as warm-up): the first cell after
+  power-on reads off. List it in the pre-registration. See
+  `docs/optimization.md`.
+- Rank candidates in the lab at fixed-cycles DOSBox-X, but decide on
+  hardware. Fixed cycles are deterministic, but blind to 486 CPI and
+  code-layout effects: a layout change alone was seen to move a 486
+  result by about 0.5 ms/tick, a HYPOTHESIS pending ABBA confirmation.
 - Decide a dedicated capture mode before you need sub-second visual
   timing verification, not after (see `dos-rig-operations`'s
   screen-capture reference).
@@ -99,8 +116,10 @@ detail) -- non-negotiable, not just good practice when convenient:
   how-to-run-it down somewhere durable (a rig runbook in the port's own
   docs), not just in a session's accumulated conversational context.
   **The concrete remedy, not just a mitigation**: install vcctrl's own
-  skills into the port repo (`npx skills add <vcctrl-repo> --full-depth
-  --all`, alongside this hub's -- see `shared/skills/README.md`). Rig
+  hardware-portable skills into the port repo (`npx skills add
+  <vcctrl-repo> --full-depth -s vcctrl-mcp-workflows -s
+  vcctrl-common-workflows -s vcctrl-rig-hazards -s vcctrl-camera`, not
+  `--all` -- alongside this hub's -- see `shared/skills/README.md`). Rig
   operating knowledge (hazards, MCP sequencing, common workflows) then
   lives in the repo itself, not only in whichever session happened to
   learn it that night -- surviving a `/clear` by construction rather than
@@ -116,7 +135,11 @@ next reader trusts it precisely because it's written down.
 A change can verifiably move the intermediate quantity it was designed to
 influence and still not move the KPI — confirm the actual target metric
 moved before crediting the fix. See `docs/optimization.md`'s
-stalls-vs-tightening finding for a real case.
+stalls-vs-tightening finding for a real case. A second one is dosags
+"D2": removing an audio `SDL_Delay(10)` from the main-thread pump cut the
+pump from 8.1 ms to 0.4 ms. The tick rate moved only 39.000 -> 39.135
+(noise 0.02), so the pre-registered target was falsified: the sleep had
+mostly fallen in idle time, and load stalls are the limiter.
 
 ## 8. Record the result
 

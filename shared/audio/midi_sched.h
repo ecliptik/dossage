@@ -41,6 +41,11 @@ typedef struct
   void (*note_off)(void *user, int channel, int note, int velocity);
   void (*control_change)(void *user, int channel, int controller, int value);
   void (*program_change)(void *user, int channel, int program);
+  /* Optional: called once per midi_sched_tick() call, after any event
+   * dispatch for that tick, while the song is playing. Added for gus_sink's
+   * own software note-off release ramp (the GF1 exports no hardware volume
+   * ramp) -- every other sink leaves this NULL. */
+  void (*on_tick)(void *user);
   void  *user;
 } midi_sched_sink;
 
@@ -80,5 +85,22 @@ uint64_t midi_sched_position_ms(const midi_sched *m);
 uint64_t midi_sched_us_per_tick_x1000(const midi_sched *m);
 uint32_t midi_sched_tempo_us(const midi_sched *m);
 uint16_t midi_sched_division(const midi_sched *m);
+
+/* GUS support (gus_sink.h): a read-only walk of the loaded song's parsed
+ * events, discovering which GM programs and percussion notes it references
+ * -- so a wavetable sink can pre-upload exactly those instruments before
+ * playback starts, instead of loading from inside note dispatch. Plain-C
+ * port of doskutsu's MidiScheduler::collect_song_instruments()
+ * (patches/nxengine-evo/0238), verified equivalent: mel_used[p] (p=0..127)
+ * is set if any program-change selects program p on a channel other than 9
+ * (the GM percussion channel); drum_used[n] (n=0..127) is set if any
+ * note-on with nonzero velocity occurs on channel 9 with note n. Both
+ * arrays are fully written (zeroed first). No state mutation -- safe to
+ * call any time after midi_sched_open() succeeds, and MUST be called
+ * before midi_sched_start()/midi_sched_tick() for a sink that uploads
+ * lazily per song (see gus_sink.h's own ordering requirement). */
+void midi_sched_collect_instruments(const midi_sched *m,
+                                     uint8_t mel_used[128],
+                                     uint8_t drum_used[128]);
 
 #endif /* SHARED_MIDI_SCHED_H */
