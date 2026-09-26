@@ -111,6 +111,214 @@ same span the in-engine measurement covers -- an unaccounted-for
 startup/teardown window on one side of the comparison but not the other
 produces a confident, wrong verdict in either direction.
 
+## PIT channel 0 on DJGPP: what `uclock()` does to it, and a latch race
+
+Source: dosags-worker's disassembly of DJGPP libc's `uclock.o`
+(2026-09-24), re-checked in the hub against the same toolchain's
+`i586-pc-msdosdjgpp/lib/libc.a`.
+
+- **The first call reprograms ch0 to MODE 2.** On its first call,
+  `uclock()` writes `0x34` to port 0x43, then `0xFF` twice to port 0x40:
+  channel 0, lo/hi access, MODE 2 (rate generator), count 0xFFFF. It then
+  tries to wait for the BIOS tick at 0x46C to change, to align with it --
+  but only while `__dpmi_yield()` succeeds (see "The first call and IF=0"
+  below). From then on, ch0 counts DOWN by 1 per 1.193182 MHz clock (838
+  ns per count). The BIOS's MODE 3 counts by 2. IRQ 0 still fires at
+  18.2 Hz. Code that reads ch0 and assumes MODE 3 misreads elapsed time
+  by a factor of two.
+  The hub's SB audio IRQ timer (SDL/0039, PIT mode) converts with 838 ns
+  per count, which is right for MODE 2; its comment still says "mode 3".
+- **Every read is unprotected.** Each `uclock()` call reads the BIOS
+  tick, sends latch command `0x00` to port 0x43, reads port 0x40 twice
+  (lo, then hi) and re-reads the BIOS tick. It retries only if the tick
+  changed. There is no `cli` around the three port operations.
+- **The race.** The 8254 has one latch and one lo/hi flip-flop per
+  channel, shared by everything that reads it. An ISR that also latches
+  and reads ch0 can fire between `uclock()`'s latch and its two reads.
+  - A latch command is ignored while a latch is still pending, so the ISR
+    can read `uclock()`'s latched value.
+  - `uclock()` can then read the live counter, with the flip-flop out of
+    step.
+  - Rare, wild values on both sides. The BIOS-tick check does not catch
+    it, because the tick has not changed.
+  In the hub that other reader is the SB audio IRQ timer in PIT mode,
+  which only 486-class CPUs use: without RDTSC they fall back to the
+  PIT. Pentium-class runs time that ISR with RDTSC and don't touch ch0
+  there.
+  **Status (dosags lab/journeys be452219, the H35-TSC test): FINDING.**
+  `isr_max` outliers under the PIT fallback are a PIT-read artefact, not
+  real ISR time.
+  - Under RDTSC (n=2 cells), the maximum ISR time equals the derived peak
+    drain (6903 us measured vs 7003 us derived, -1.4%), and no reading
+    reached 10 ms.
+  - On the PIT, 43 of 46 cells had readings >= 10 ms (22-54 ms).
+  The test did NOT separate the two possible mechanisms:
+  - a single-delta wrap or reload misread (see the next bullet);
+  - this latch race, which remains a candidate mechanism.
+  **Practical rule:** on 486-class builds, which time the ISR with the
+  PIT, never judge a single `isr_max` reading. Derive the bound instead,
+  as burst x per-write cost (the most entries one IRQ handled, times the
+  cost of one write).
+- **A single PIT delta wraps at 54.9 ms** (65536 counts). Time a wait
+  longer than that by summing steps that are each shorter than 54.9 ms,
+  or use a clock that folds in the BIOS tick (`uclock()` itself does).
+
+**Recommended pattern** (no shared patch implements it yet):
+- One IRQ-safe PIT read routine, used by every piece of port or shared
+  code that reads ch0: interrupts off around the three port operations
+  (`pushf; cli; out 0x43,0; in 0x40; in 0x40; popf`), and around nothing
+  more. While IF=0, IRQ 0 ticks are held back, so the window stays at
+  those three or four port operations, never a longer section. The
+  routine is needed in mainline code, and inside an ISR that has
+  re-enabled interrupts: dosags' SDL 0226 v2 does `sti` during its MIDI
+  drain, and any such handler must use it too. Only an ISR that has NOT
+  re-enabled interrupts is already safe.
+- `uclock()` itself is libc and cannot be patched. Where an ISR also
+  latches ch0, the robust choice is to keep ch0 reads out of that ISR
+  (RDTSC where present, or count IRQs).
+- If you must wrap `uclock()` in `pushf; cli; ... popf` instead, make
+  one warm-up `uclock()` call with interrupts ON before any cli-wrapped
+  call. Keep the wrap to that single call, because each read already
+  spans several port operations and holds IRQ 0 back while it runs.
+- **The first call and IF=0: the hang needs a narrow host.** The first
+  call's tick wait (libc.a `uclock.o`, re-checked in the hub 2026-09-25)
+  is `do { errno = 0; __dpmi_yield(); } while (errno == 0 && tick
+  unchanged)`. `__dpmi_yield()` (`2f_1680.o`) simulates real-mode INT 2Fh
+  AX=1680h and sets `errno` to ENOSYS when AL comes back 80h, i.e. when
+  nothing answered. So the first call only waits on the tick while the
+  yield is answered, and it only hangs with IF=0 on a host that answers
+  1680h AND does not let IRQ 0 advance 0040:006C during the yield.
+  Measured in DOSBox-X 2025.02.01 with CWSDPMI (hub probe YLD2,
+  2026-09-25; three confs: the hub's parity conf, the same with
+  `dos idle api=false`, and a --sb-live SB16/OPL3 fixed-40k conf):
+  - `dos idle api` at its default (all hub and dosags confs): 1680h is
+    answered (AL=00), and with IF=0 in protected mode the tick still
+    advanced during the FIRST yield call, so IRQ 0 is serviced somewhere
+    inside the answered call and the loop ends on the tick. The
+    real-mode flags the host hands back carry IF=0 (the image DJGPP
+    passed in), so they don't show where IRQ 0 got in.
+  - `dos idle api=false`: 1680h is not answered (AL=80), `errno` is set,
+    and the loop ends on its first pass. With IF=0, 4000 unanswered
+    yields did not advance the tick: an unanswered reflection does not
+    service IRQ 0.
+  - In all three confs a first `uclock()` called with IF=0 returned. In
+    DOSBox-X the IF=0 first call is safe either way, for two different
+    reasons. That is also why dosags' TPIT-H (cli-wrapped first call,
+    DOSBox-X, default conf) exited 0.
+  - Plain MS-DOS + CWSDPMI on the 486: expected to be the unanswered
+    case (nothing there should answer 1680h), so the loop would end on
+    `errno`. **Unverified on real hardware.**
+  - The hang is real only on a host that answers 1680h without letting
+    IRQ 0 in. Whether a Win9x DOS box or a multitasker behaves that way
+    is untested; no hang has been observed anywhere.
+  So a TPIT-style hang control (first `uclock()` under `cli`, expected
+  to hang) has no power in DOSBox-X, and by the above likely none on
+  plain DOS + CWSDPMI: it passes whether or not the code under test is
+  safe. Keep the warm-up call with interrupts ON anyway; it costs
+  nothing and covers the hosts where the hang is real. (The separate
+  RDTSC path, taken only when `_os_trueversion` is 0x532, i.e. an NT DOS
+  box, spins on the tick with no yield at all, and would hang with IF=0.)
+- Never reprogram ch0 with a mode or count that `uclock()` doesn't
+  expect (see "Your clock can lie" above).
+
+## An engine's portable clock can cost 1.3 ms PER READ, and its sleep a whole 55 ms tick
+
+The `gettimeofday()` finding above is about *resolution*. This one is
+about *cost*, and it applies to any C++ engine that keeps time with
+`std::chrono` -- on DJGPP, `std::chrono::steady_clock`/
+`high_resolution_clock::now()` lands in `gettimeofday()`. Measured on
+HW-486-66 by a standalone probe, 10,000 iterations each (dosags,
+2026-09-17; `tests/harness/results/clock-probe/` and the "40/40 plan"
+P1 item 1 in its `PLAN.md`):
+
+| primitive | per call |
+|---|---|
+| `uclock()` (control) | 4.9 us |
+| engine `Clock::now()` (std::chrono) | **1324.6 us** |
+| `gettimeofday()` underneath it | 1318.8 us |
+| `mktime()` inside that -- the largest part | 723.7 us |
+| one `__dpmi_int(0x21)` (two per call) | 171.2 us |
+| `__dpmi_int(0x33)` mouse poll, for scale | 81.9 us |
+| `std::this_thread::sleep_for(0)` | 0.4 us |
+| `sleep_for(1 ms / 10 ms / 25 ms)` | **~54.8 ms each** |
+
+Consequences, all seen for real in AGS on the DX2-66:
+
+- **The cost is mostly `mktime()`'s calendar arithmetic, not the DPMI
+  real-mode switches.** "It is just a DOS call" undersells it by 4x.
+- **A handful of innocent clock reads per tick is a large slice of a
+  25 ms budget.** AGS read its clock ~5 times per logic tick on an idle
+  screen (three in its end-of-tick bookkeeping, one each in the
+  fixed-timestep driver and the frame wait): ~6.3 ms per tick of pure
+  overhead, predicted from call counts and matching the measured phase
+  costs to within 4-18%. Two of those reads were the
+  port's own once-a-second samplers polling the clock every tick to see
+  whether a second had passed -- count ticks instead.
+- **The signature to look for:** a timed phase whose cost is suspiciously
+  constant (min = max to the millisecond) across thousands of calls while
+  doing no real work. Count `now()` call sites on the hot path and
+  multiply before hunting anything more exotic.
+- **The mouse poll was checked and ruled out** (0.25 ms per tick) -- a
+  per-tick `INT 33h` is cheap next to one `gettimeofday()`.
+- **Any positive sleep costs up to a full 55 ms BIOS tick.** A frame
+  pacer built on `sleep_for()`/`nanosleep` cannot pace a 25 ms frame.
+- **Swap the clock and the pacer in the same change.** With the coarse
+  55 ms clock the pacer always believes it is behind and never sleeps,
+  so it is accidentally harmless. Give it an accurate clock alone and it
+  will start sleeping ~55 ms every frame, capping the game near 18 fps.
+  Replace the wait with a `uclock()`-deadline wait (interrupts enabled,
+  audio still pumped -- see the busy-wait hazard above) in the same
+  slice, and validate with an external wall-clock bracket, because the
+  change replaces the very clock the engine's self-report uses.
+
+Fix shape: a DOS-only clock type backed by `uclock()` behind the engine's
+own clock alias (guarded `#ifdef __DJGPP__`), leaving calendar-time users
+on the system clock. **Find EVERY clock alias, not just the main one:**
+dosags's first pass replaced the engine's `Clock` and missed a second
+alias, `FastClock = std::chrono::system_clock`, which the script
+interpreter reads on every script function call -- another ~2.5 ms per
+tick. Grep for `::now()` and for every `chrono` clock type, then decide
+per user whether it needs calendar time (keep) or a duration (swap). Respect `uclock()`'s own limits documented above
+(not monotonic across a wrong-order subtract; read DJGPP's source for its
+midnight behaviour before relying on it across a long session).
+
+## With TZ unset, DJGPP's libc can land in a garbage timezone state: wrong dates and ~42 ms clock reads
+
+Found in dosags, 2026-09-17 (its patch 0097 and PLAN.md "libc zone bug").
+With `TZ` unset, DJGPP's `tzset()` looks for a default zone file
+(`/dev/env/DJDIR/etc/localtime`, then zoneinfo fallbacks). On a target
+with no DJGPP install every open fails (errno 22 on the g2k 486), and
+what is left behind is not a clean UTC: probes read `tm_gmtoff` of
+-1024 s in one process and -675288 s in the next; inside the AGS engine
+it came out as +11896 days, so RUNMANIFEST's `started_utc` read 2059 to
+2071. `localtime()` stayed correct, which is why nobody noticed.
+
+Two consequences, both invisible unless you look for them:
+
+- **Every `gettimeofday()` -- and so every `std::chrono` clock read --
+  cost ~42 ms instead of 1.3 ms** in the bad state, because it runs
+  `mktime()` through the broken zone data. CPU-bound phases stayed
+  normal while every phase containing a clock read ran ~31x slow.
+- **Whether a given process is hit varies with the binary and with the
+  environment it runs under (which `SET` lines), so it CONFOUNDS A/B
+  comparisons rather than adding noise.** About twenty dosags
+  real-hardware cells over four days carried a wrong date, and they were
+  the catastrophically slow ones. Some conclusions built on them had to
+  be marked "re-measure", including a whole sound-on/sound-off campaign.
+  DOSBox-X is not immune, only milder (records dated ~76 days off).
+
+**What every DJGPP port should do:** call `setenv("TZ","UTC0",0);
+tzset();` first thing in `main` (a TZ that is set is parsed, never loaded
+from a file; `UTC0` is what the fallback was meant to produce, DOS local
+time taken as-is), and **treat a `started_utc` that is not today as a
+cell invalidity** in any benchmark harness -- it is a free, already-logged
+tell. A year check is not enough: the garbage offset can be minutes or
+days. Status for the other ports: doskutsu's 128 recorded run dates and
+dossage's are all in the right year, neither sets `TZ`, and neither has
+been checked at finer grain -- unverified, not cleared. Setting `TZ` in
+the target's own boot configuration would protect every program at once;
+that is a boot-config change and needs the operator's say-so.
+
 ## SDL_Delay() overshoot on 486-class CPUs (resolved: delay(1) granularity, not clock rate)
 
 dossage/Passage bisected a residual fps gap on 486DX2-66 + S3 ViRGE (see

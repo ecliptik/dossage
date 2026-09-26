@@ -9,10 +9,11 @@
 # Usage:
 #   tools/dosbox-launch.sh                         # open DOSBox-X at C:\ (repo root)
 #   tools/dosbox-launch.sh --fast                  # use dosbox-x-fast.conf
-#   tools/dosbox-launch.sh --kill-first            # kill any running instance first
+#   tools/dosbox-launch.sh --kill-first            # kill the instance on this DISPLAY first
 #   tools/dosbox-launch.sh --exe build/game.exe    # auto-run on launch
 #   tools/dosbox-launch.sh --stage                 # mount build/stage/ as C:
 #   tools/dosbox-launch.sh --stage --exe GAME.EXE  # stage + auto-run
+#   DOSBOX_DISPLAY=auto tools/dosbox-launch.sh     # own headless display (300-399)
 #
 # The --stage form runs `make stage` first (so GAME.EXE + CWSDPMI.EXE +
 # data/ all sit together) and mounts that staging dir as C:. This matches the
@@ -25,7 +26,8 @@
 #   DISPLAY=:0 xdotool search --name DOSBox windowactivate --sync
 #   DISPLAY=:0 xdotool type --delay 40 'GAME'
 #   DISPLAY=:0 xdotool key Return
-#   pkill -x dosbox-x                                     # stop it
+#   Ctrl+F9 in the window, or --kill-first on the next launch  # stop it
+#   (never `pkill -x dosbox-x`: it kills every workstream's DOSBox-X)
 
 set -euo pipefail
 
@@ -54,7 +56,8 @@ usage() {
 Usage: dosbox-launch.sh [--fast] [--kill-first] [--stage] [--exe PATH]
 
   --fast, -f         Use dosbox-x-fast.conf (cycles=max) instead of parity config
-  --kill-first, -k   Kill any running dosbox-x process first
+  --kill-first, -k   Kill the dosbox-x already running on this DISPLAY first
+                     (only that one: other displays belong to other work)
   --stage, -s        Run `make stage` and mount build/stage/ as C: (where
                      GAME.EXE + CWSDPMI.EXE + data/ sit together -- the
                      layout NXEngine-evo's ResourceManager expects on DOS).
@@ -88,14 +91,68 @@ if [[ -n "$CONF_OVERRIDE" ]]; then
   echo "dosbox-launch.sh: conf overridden via DOSBOX_CONF -> $CONF"
 fi
 
-if [[ "$KILL_FIRST" == "1" ]] && pgrep -x dosbox-x >/dev/null 2>&1; then
-  echo "Stopping running dosbox-x..."
-  pkill -x dosbox-x || true
+# Scope every "is it running / kill it" to DOSBox-X on OUR display. This
+# used to be a host-wide `pgrep -x` refusal plus a global `pkill -x dosbox-x`
+# for --kill-first, which killed other workstreams' runs (a gate capturing on
+# its own Xvfb display, an --sb-live cell under xvfb-run) -- the hazard
+# dosbox-teardown.sh documents. See dbx_pids_on_display there.
+# shellcheck source=./dosbox-teardown.sh
+source "$SCRIPT_DIR/dosbox-teardown.sh"
+# the display allocator (dosbox-lock-lib.sh, next to the real script)
+# shellcheck source=./dosbox-lock-lib.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/dosbox-lock-lib.sh"
+
+# Display (see dosbox-lock-lib.sh, DISPLAY ALLOCATION). This launcher takes
+# no host lock, only a display:
+#   - DOSBOX_DISPLAY=auto: allocate a free display from DOSBOX_DISPLAY_RANGE
+#     (default 300-399) and start a headless Xvfb on it for this session --
+#     for scripted/agent sessions that drive DOSBox-X with xdotool;
+#   - DOSBOX_DISPLAY=:N (N != 0): take display N's flock, so this window can
+#     never share a display with another cell's captures; wait up to
+#     DOSBOX_DISPLAY_WAIT seconds (default 10), then refuse;
+#   - unset or :0: the human's desktop, no display lock (as before).
+# The flock is inherited by DOSBox-X (and, in auto mode, by the small
+# supervisor that stops our Xvfb when DOSBox-X exits), so it lasts exactly
+# as long as the session, after this script has returned. Everything this
+# launcher starts has the other lock fds (6-9) closed, and our Xvfb all of
+# 5-9: a caller that holds the host lock on fd 8 and launches a session must
+# not have that session -- or an orphaned Xvfb -- keep its lock alive.
+AUTO_DISPLAY=0
+if [[ "${DOSBOX_DISPLAY:-}" == "auto" ]]; then
+  if ! dbxlock_display_acquire "" "${DOSBOX_DISPLAY_WAIT:-10}" >/dev/null; then
+    echo "dosbox-launch.sh: no free display in ${DOSBOX_DISPLAY_RANGE:-300-399}" >&2
+    exit 1
+  fi
+  DOSBOX_DISPLAY=":$DBXLOCK_DISPLAY"; AUTO_DISPLAY=1
+elif [[ -n "${DOSBOX_DISPLAY:-}" ]]; then
+  _pin="$(dbxlock_display_num "$DOSBOX_DISPLAY")"
+  # DOSBOX_DISPLAY_HELD=1: the caller holds this display's flock already
+  # (see dosbox-run.sh); taking it again would block on the caller.
+  if [[ -n "$_pin" && "$_pin" != "0" && "${DOSBOX_DISPLAY_HELD:-0}" != "1" ]]; then
+    if ! dbxlock_display_acquire "$_pin" "${DOSBOX_DISPLAY_WAIT:-10}" >/dev/null; then
+      echo "dosbox-launch.sh: display :$_pin is held by another cell (still after ${DOSBOX_DISPLAY_WAIT:-10}s); not launching. Use DOSBOX_DISPLAY=auto or another display." >&2
+      exit 1
+    fi
+  fi
+fi
+LAUNCH_DISPLAY="${DOSBOX_DISPLAY:-:0}"
+
+if [[ "$KILL_FIRST" == "1" ]] && [[ -n "$(dbx_pids_on_display "$LAUNCH_DISPLAY")" ]]; then
+  echo "Stopping the dosbox-x running on $LAUNCH_DISPLAY..."
+  dbx_kill_display "$LAUNCH_DISPLAY"
   sleep 1
+  dbx_kill_display "$LAUNCH_DISPLAY" KILL
 fi
 
-if pgrep -x dosbox-x >/dev/null 2>&1; then
-  echo "dosbox-x is already running. Use --kill-first to restart." >&2
+if [[ -n "$(dbx_pids_on_display "$LAUNCH_DISPLAY")" ]]; then
+  echo "dosbox-x is already running on $LAUNCH_DISPLAY. Use --kill-first to restart it." >&2
+  exit 1
+fi
+# A DOSBox-X from another sandbox or user is invisible to the pid check above
+# (its environ is unreadable) but its window is on the display. It is not
+# ours to kill, even with --kill-first: refuse.
+if dbx_window_on_display "$LAUNCH_DISPLAY"; then
+  echo "a DOSBox-X window is already on $LAUNCH_DISPLAY and it is not one this session can identify (another sandbox or user): not launching and not killing it. Use another DOSBOX_DISPLAY, or stop that run." >&2
   exit 1
 fi
 
@@ -122,12 +179,14 @@ export DISPLAY="${DOSBOX_DISPLAY:-:0}"
 # binaries that aren't yet staged. The BLASTER env var matches the
 # [sblaster] block in dosbox-x.conf; SDL3-DOS reads it.
 #
-# SDL_DOS_AUDIO_SB_SKIP_DETECTION -- escape hatch from patches/SDL/0001. The
-# real-HW timing fixes in that patch are correct, but DOSBox-X's emulated SB16
-# returns 0xFF on the DSP detection read regardless of timing tuning. Setting
-# this env var tells SDL3-DOS to skip detection and trust BLASTER, which is the
-# only way audio inits in the emulator. Real hardware (g2k Phase 8) MUST NOT
-# set this -- it would mask a legitimate Vibra16S regression.
+# SDL_DOS_AUDIO_SB_SKIP_DETECTION -- escape hatch from patches/SDL/0001.
+# CORRECTED 2026-09-22: this comment used to say DOSBox-X's emulated SB16
+# returns 0xFF on the DSP detection read regardless of timing tuning. That was
+# an artifact of dosbox-run.sh's `-silent`, which switches the emulated SB off;
+# this launcher never passes -silent, and here detection passes (dsp_ver=4,
+# IRQ-5 firing) with or without the skip. It stays set for now only to keep
+# interactive runs unchanged; it is not needed. Real hardware MUST NOT set it
+# -- it would mask a real card-detection failure.
 
 if [[ "$STAGE" == "1" ]]; then
   echo "Running 'make stage' to populate build/stage/..."
@@ -175,13 +234,35 @@ if [[ -n "$EXE" ]]; then
 fi
 
 CONF_NAME="$(basename "$CONF")"
-echo "Launching DOSBox-X (DISPLAY=$DISPLAY, config=$CONF_NAME)..."
-dosbox-x "${DBX_ARGS[@]}" &
-DBX_PID=$!
+if [[ "$AUTO_DISPLAY" == "1" ]]; then
+  # our own Xvfb (without the display fd, so it cannot outlive the session
+  # by holding it), then DOSBox-X under a supervisor that holds the display
+  # flock and stops the Xvfb once DOSBox-X exits
+  Xvfb "$DISPLAY" -screen 0 1280x1024x24 -nolisten tcp 5>&- 6>&- 7>&- 8>&- 9>&- >/dev/null 2>&1 &
+  XVFB_PID=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 && break; sleep 0.5; done
+  echo "Launching DOSBox-X (DISPLAY=$DISPLAY, allocated, headless Xvfb pid $XVFB_PID, config=$CONF_NAME)..."
+  # the supervisor releases the display flock only after our Xvfb is GONE
+  # (not just signalled), so the next owner of the display cannot start its
+  # Xvfb while ours is still shutting down
+  ( dosbox-x "${DBX_ARGS[@]}"; kill "$XVFB_PID" 2>/dev/null
+    for _ in $(seq 1 100); do kill -0 "$XVFB_PID" 2>/dev/null || break; sleep 0.1; done
+  ) 6>&- 7>&- 8>&- 9>&- &
+  SUP_PID=$!
+  DBX_PID=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    DBX_PID="$(pgrep -P "$SUP_PID" 2>/dev/null | head -n 1 || true)"; [[ -n "$DBX_PID" ]] && break; sleep 0.2
+  done
+  DBX_PID="${DBX_PID:-$SUP_PID}"
+else
+  echo "Launching DOSBox-X (DISPLAY=$DISPLAY, config=$CONF_NAME)..."
+  dosbox-x "${DBX_ARGS[@]}" 6>&- 7>&- 8>&- 9>&- &
+  DBX_PID=$!
+fi
 echo "DOSBox-X running (PID $DBX_PID)."
 echo
-echo "  screenshot:  DISPLAY=:0 scrot -u /tmp/dosbox.png"
-echo "  focus:       DISPLAY=:0 xdotool search --name DOSBox windowactivate --sync"
-echo "  type:        DISPLAY=:0 xdotool type --delay 40 'GAME'"
-echo "  key:         DISPLAY=:0 xdotool key Return"
-echo "  stop:        pkill -x dosbox-x    (or Ctrl+F9 in the window)"
+echo "  screenshot:  DISPLAY=$DISPLAY scrot -u /tmp/dosbox.png"
+echo "  focus:       DISPLAY=$DISPLAY xdotool search --name DOSBox windowactivate --sync"
+echo "  type:        DISPLAY=$DISPLAY xdotool type --delay 40 'GAME'"
+echo "  key:         DISPLAY=$DISPLAY xdotool key Return"
+echo "  stop:        Ctrl+F9 in the window, or kill $DBX_PID (never pkill -x dosbox-x)"

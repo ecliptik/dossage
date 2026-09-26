@@ -25,32 +25,44 @@ from day to day.
 (`.claude-plugin/plugin.json`, name `sdldos`; the root `skills/`
 directory is its skill set -- the hub-only `port` skill plus symlinks
 into the entries above, one source of truth). A port repo enables it
-with a tracked `.claude/settings.json`:
+with a tracked `.claude/settings.json` that only turns it on:
+
+```json
+{ "enabledPlugins": { "sdldos@sdl-dos-ports": true } }
+```
+
+The marketplace URL points at the private tailnet Forgejo, and port repos
+are mirrored publicly, so it lives in the untracked
+`.claude/settings.local.json` instead (placeholder host shown; use the
+hub's real `origin` URL):
 
 ```json
 {
   "extraKnownMarketplaces": {
     "sdl-dos-ports": {
       "source": { "source": "git",
-                  "url": "https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git" }
+                  "url": "https://forgejo.example.ts.net/ecliptik/sdl-dos-ports.git" }
     }
   },
   "enabledPlugins": { "sdldos@sdl-dos-ports": true }
 }
 ```
 
-`scripts/new-port.sh` writes that file, and the `.gitignore` rule that
+`scripts/new-port.sh` writes both files, and the `.gitignore` rule that
 lets it be tracked while the rest of `.claude/` stays local (`.claude/*`
 plus `!.claude/settings.json` -- git can't re-include a file under an
 ignored parent directory, so a bare `.claude/` line would swallow it).
-Anyone who opens and trusts the repo is offered the plugin and gets
+Anyone who opens and trusts the repo (with the local file in place) is offered the plugin and gets
 `/sdldos:port`, `/sdldos:review`, `/sdldos:benchmark`,
 `/sdldos:dos-hardware-validation`, ... -- no per-repo copy of any
 `SKILL.md`. The installed plugin is a snapshot keyed by the `version`
 in `.claude-plugin/plugin.json`: `/plugin update sdldos` fetches a new
 version and reports "already at the latest version" otherwise, so every
 skill or layout change here must bump that version (1.0.0 -> 1.0.1 was
-the first such bump, 2026-09-03) or it never reaches an installed copy.
+the first such bump, 2026-09-03; 1.0.2, 2026-09-17, added the benchmark
+skill's `references/self-driving-loop.md`; 1.0.3, same day, the
+post-FTP keyboard-hang recovery procedure) or it never reaches an
+installed copy.
 `claude --plugin-dir <path-to-this-hub>` loads the working tree for one
 session instead (it overrides the installed copy), which is how to test
 a skill edit here before pushing it. The marketplace install copies the
@@ -58,8 +70,12 @@ whole repo into Claude Code's plugin cache with the `skills/` symlinks
 preserved, so they resolve there too (verified 2026-09-03).
 
 **vcctrl's skills are not a plugin** and still install flat, per repo,
-via `npx skills add <vcctrl repo> --full-depth --all -a claude-code`
-(`--full-depth` because that repo has no root-level `SKILL.md`);
+via `npx skills add <vcctrl repo> --full-depth -a claude-code -s
+vcctrl-mcp-workflows -s vcctrl-common-workflows -s vcctrl-rig-hazards -s
+vcctrl-camera` (`--full-depth` because that repo has no root-level
+`SKILL.md`; explicit `-s` flags, not `--all`, because vcctrl also ships
+`vcctrl-repo-conventions` and `vcctrl-webkvm-copy` -- its own contributor
+conventions, not anything a port repo needs);
 `scripts/new-port.sh` runs this at scaffold time. A port picks up new
 vcctrl skills with `npx skills update`.
 
@@ -89,7 +105,7 @@ entries per skill. vcctrl's skills stay as they were.
 **For an agent that can't load Claude Code plugins** (Codex, Cursor, or a
 first trust with no network), the flat path still works and reads the
 same files: `npx skills add
-https://forgejo.ecliptik.com/ecliptik/sdl-dos-ports.git --full-depth
+https://forgejo.example.ts.net/ecliptik/sdl-dos-ports.git --full-depth
 --all -a <agent>` from the port's root; or, with no `npx` at all,
 `.sdl-dos-ports/shared/scripts/sync-skills.sh` symlinks this hub's
 `shared/skills/` entries into `.claude/skills/` (hub skills only -- no

@@ -483,6 +483,41 @@ void midi_sched_tick(midi_sched *m, uint64_t now_ms)
     }
     m->next_idx++;
   }
+
+  /* Optional per-tick backend hook (gus_sink's software note-off release
+   * ramp; see midi_sched_sink's own doc comment). Runs once per call, after
+   * dispatch, while playing -- matching doskutsu's MidiScheduler::tick()
+   * ordering (patch 0254). NULL for every other sink. */
+  if (m->sink.on_tick)
+    m->sink.on_tick(m->sink.user);
+}
+
+void midi_sched_collect_instruments(const midi_sched *m,
+                                     uint8_t mel_used[128],
+                                     uint8_t drum_used[128])
+{
+  uint32_t i;
+
+  memset(mel_used, 0, 128);
+  memset(drum_used, 0, 128);
+  if (!m)
+    return;
+
+  for (i = 0; i < m->nevents; ++i)
+  {
+    const smf_ev *ev = &m->events[i];
+    if (ev->type == EV_PROGRAM_CHANGE)
+    {
+      if (ev->channel != 9 && ev->data1 < 128)
+        mel_used[ev->data1] = 1;
+    }
+    else if (ev->type == EV_NOTE_ON)
+    {
+      /* data2 == 0 is a note-off-by-zero-velocity; ignore for "used". */
+      if (ev->channel == 9 && ev->data2 != 0 && ev->data1 < 128)
+        drum_used[ev->data1] = 1;
+    }
+  }
 }
 
 uint32_t midi_sched_event_count(const midi_sched *m)

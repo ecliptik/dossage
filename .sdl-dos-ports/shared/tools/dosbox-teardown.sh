@@ -55,3 +55,49 @@ dbx_kill_conf() {
   done
   return 0
 }
+
+# dbx_pids_on_display <display>
+#   Prints the pids of dosbox binaries (comm-filtered, as above) whose own
+#   environment has DISPLAY=<display>, e.g. ":0" or ":251". Scoping by the
+#   display a process actually draws on -- read from /proc/<pid>/environ, so
+#   only this user's processes are visible, which is all we may signal anyway
+#   -- lets a launcher find ITS instance on ITS display without touching a
+#   DOSBox-X another workstream runs on another display, whatever conf either
+#   uses. (Every `--fast` run shares one conf path, so conf scoping alone
+#   cannot tell two workstreams apart.)
+dbx_pids_on_display() {
+  local disp="$1" pid comm d
+  [[ -n "$disp" ]] || return 0
+  for pid in $(pgrep -x dosbox-x 2>/dev/null; pgrep -x dosbox-x-fast 2>/dev/null); do
+    comm=$(cat "/proc/$pid/comm" 2>/dev/null || true)
+    case "$comm" in dosbox-x|dosbox-x-fast|dbxreview|dosbox*) ;; *) continue ;; esac
+    # unreadable (another sandbox or user): not ours to identify -> skipped
+    [[ -r "/proc/$pid/environ" ]] || continue
+    d=$( { tr '\0' '\n' < "/proc/$pid/environ"; } 2>/dev/null | sed -n 's/^DISPLAY=//p' | head -n 1)
+    [[ "$d" == "$disp" ]] && echo "$pid"
+  done
+  return 0
+}
+
+# dbx_kill_display <display> [signal] -- signal only the dosbox on <display>.
+dbx_kill_display() {
+  local sig="${2:-TERM}" pid
+  for pid in $(dbx_pids_on_display "$1"); do
+    kill "-${sig}" "$pid" 2>/dev/null || true
+  done
+  return 0
+}
+
+# dbx_window_on_display <display>
+#   Exit 0 if the X server on <display> has a top-level window whose WM_CLASS
+#   is dosbox-x -- whoever owns it. dbx_pids_on_display cannot see a DOSBox-X
+#   started from another sandbox or user (its /proc environ is unreadable),
+#   but its window is on the display all the same, and it would land in any
+#   root-window capture there. The X server is the authority on what is on a
+#   display. Exit 1 if there is none, or no X server answers.
+dbx_window_on_display() {
+  local disp="$1"
+  [[ -n "$disp" ]] || return 1
+  command -v xwininfo >/dev/null 2>&1 || return 1
+  xwininfo -display "$disp" -root -children 2>/dev/null | grep -q '("dosbox-x"'
+}

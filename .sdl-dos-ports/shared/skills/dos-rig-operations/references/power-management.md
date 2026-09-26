@@ -71,3 +71,58 @@ attempt will be the one that works. Repeated blind power-cycling against
 unresolved ambiguity risks compounding whatever's actually wrong (a card
 that needs a clean shutdown to re-enumerate, interrupted writes) rather
 than fixing it.
+
+## The return reboot that never takes: signature, check, recovery
+
+A recurring fault on the g2k 486 machine: twice in two days (2026-09-16,
+2026-09-17) the target stopped answering the keyboard immediately after
+an FTP session in the NET boot profile, at the reboot chord that
+`send-file --return` / `get-file --return` issue to get back to the
+normal profile. A related dead-link incident a day earlier (dosags tag
+S32B5, 2026-09-15) had the same `verify-input` signature but struck
+mid-run, after the launch batch file was typed -- so the FTP session may
+be a trigger rather than the cause. Root cause unknown; it is tracked on
+vcctrl's side as an open PS/2-hang fault. What matters for a port session
+is recognising it in a minute and recovering without a human.
+
+**Signature.** The screen sits on the FINISHED FTP-client output (mTCP's
+"226 Transfer complete", "221 Goodbye", "Server closed control
+connection", its bug-report footer) with no prompt after it. Nothing is
+in flight on vcctrl, the input lock is free, mains power reads on.
+Ctrl-Alt-Del from anywhere does nothing.
+
+**Check, in this order:**
+
+1. Lock and activity first (previous section) -- a held lock is not a
+   hang.
+2. Give the chord its real window (the section before that: a working
+   chord has taken ~85 s). Judge from a time at least that long after
+   the chord, not from the first static screenshot.
+3. Both capture channels (`vcctrl_shot` and the camera) still show the
+   same FTP output.
+4. `verify-input`. It is valid and safe HERE because no SDL3-DOS program
+   is running (never send it while one might be -- see
+   `docs/hardware-testing.md`). The fault reads `"verified": false`, "no
+   LED change", typically with the lock LEDs stuck in whatever state they
+   had. A hung machine and a dead PS/2 link are indistinguishable from
+   the wire, and it does not matter: the recovery is the same.
+
+**Recovery.** One full power cycle -- a warm reboot cannot work, the
+keyboard path is the thing that is dead. Verify the FULL boot sequence by
+screenshot (not merely "picture present"), and require `verify-input` to
+come back true before doing anything else. Then account for the step
+that was interrupted: trust only collected files whose size/hash verify,
+and re-collect or re-run under a FRESH tag if there is any doubt. If the
+single power cycle does not restore the link, stop and escalate, per the
+policy above.
+
+**Automate it -- do not leave this to whoever happens to be watching.**
+Any script that reboots the target must (a) require a positive "the
+reboot took" witness within a bounded time -- the screen leaves the FTP
+output and reaches the boot banner / ready prompt; (b) on failure run
+the check above and, on `verified: false`, perform the one power cycle
+itself, re-verify boot and link, and resume from the step that failed;
+(c) stop and report on a second failure; (d) log every recovery in the
+run record (tag, step, time lost) so the frequency is visible. Without
+(a), a harness that correctly refuses to proceed simply sits there, and
+the fault costs as long as it takes a human to notice.
